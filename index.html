@@ -169,6 +169,28 @@ function randInt(a, b) { return Math.floor(rand(a, b)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+function buildZombieSprite() {
+  const spriteH = ZOMBIE_SPRITE.length;
+  const spriteW = ZOMBIE_SPRITE[0].length;
+  const canvas = document.createElement('canvas');
+  canvas.width = spriteW;
+  canvas.height = spriteH;
+  const cctx = canvas.getContext('2d');
+  cctx.clearRect(0, 0, spriteW, spriteH);
+
+  for (let y = 0; y < spriteH; y++) {
+    const row = ZOMBIE_SPRITE[y];
+    for (let x = 0; x < spriteW; x++) {
+      const key = row[x];
+      if (key === '.') continue;
+      cctx.fillStyle = ZOMBIE_PALETTE[key] || '#000000';
+      cctx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  zombieSprite = canvas;
+}
+
 // ─── WORLD GENERATION ──────────────────────────────────────
 function generateWorld() {
   zombies = [];
@@ -603,6 +625,18 @@ function drawZombie(z, p) {
     return;
   }
 
+  if (zombieSprite) {
+    const spriteH = zombieSprite.height;
+    const spriteW = zombieSprite.width;
+    const drawH = bodyH * 1.2;
+    const drawW = drawH * (spriteW / spriteH);
+    const drawX = baseP.x - drawW / 2;
+    const drawY = baseP.y - drawH;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(zombieSprite, drawX, drawY, drawW, drawH);
+    return;
+  }
+
   let limbOff = Math.sin(z.limbPhase) * bodyH * 0.08;
 
   // Legs
@@ -940,6 +974,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ─── MAIN LOOP ─────────────────────────────────────────────
+buildZombieSprite();
 generateWorld();
 applyRoundTheme();
 
