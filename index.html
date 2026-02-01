@@ -67,8 +67,8 @@ canvas { display: block; }
 <script>
 // ─── CONFIG ────────────────────────────────────────────────
 const CFG = {
-  TOWER_HEIGHT: 35,
-  VIEW_FOV: 40,
+  TOWER_HEIGHT: 18,
+  VIEW_FOV: 70,
   MIN_ZOOM: 1,
   MAX_ZOOM: 6,
   ZOMBIE_COUNT: 30,
@@ -87,8 +87,8 @@ let started = false;
 let kills = 0;
 let streak = 0;
 let bestStreak = 0;
-let zoom = 2;
-let yaw = 0, pitch = -0.6;
+let zoom = 1;
+let yaw = 0, pitch = -0.4;
 let mouseX = 0, mouseY = 0;
 let hintTimer = 8000;
 let muzzleFlash = 0;
@@ -747,7 +747,7 @@ function playSound(type) {
 // ─── INPUT ─────────────────────────────────────────────────
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
-  let sensitivity = 0.002 / zoom;
+  let sensitivity = 0.003 / zoom;
   yaw += e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
   pitch = clamp(pitch, -Math.PI / 2 + 0.05, 0.3);
