@@ -123,44 +123,6 @@ let muzzleFlash = 0;
 let recoilT = 0;
 let round = 1;
 let themeIndex = 0;
-let musicOn = false;
-let musicOsc = null;
-let musicGain = null;
-let zombieSprite = null;
-const ZOMBIE_SPRITE = [
-  "................",
-  "....KKKKKK......",
-  "...KGGGGGGK.....",
-  "..KGGGGGGGGK....",
-  "..KGGYYYYGGK....",
-  "..KGGYYYYGGK....",
-  "..KGGGGGGGGK....",
-  "..KGGgGGgGGK....",
-  "...KGGGGGGK.....",
-  "....KKKKKK......",
-  ".....KKKK.......",
-  "..KBBBBBBBBK....",
-  "..KBBBBBBBBK....",
-  "..KBBBBBBBBK....",
-  "..KBBBBBBBBK....",
-  "..KBBBBBBBBK....",
-  "...KBBBBBBK.....",
-  "....KBBBBK......",
-  "....KDDDDK......",
-  "...KDDDDDDK.....",
-  "..KDD..DDDK.....",
-  "..KDD..DDDK.....",
-  "..KDD..DDDK.....",
-  "...KK...KK......",
-];
-const ZOMBIE_PALETTE = {
-  K: "#111111",
-  G: "#6fa354",
-  g: "#4d7b3a",
-  B: "#6b4f2a",
-  D: "#3b4d78",
-  Y: "#d9b447",
-};
 
 const THEMES = [
   {
@@ -314,6 +276,20 @@ function updateRemainingUI() {
   }
 }
 
+function zombieCountForRound() {
+  return CFG.ZOMBIE_COUNT + Math.floor((round - 1) * 4);
+}
+
+function applyRoundTheme() {
+  themeIndex = (round - 1) % THEMES.length;
+}
+
+function startNextRound() {
+  round += 1;
+  applyRoundTheme();
+  generateWorld();
+}
+
 function spawnZombie() {
   let angle = rand(0, Math.PI * 2);
   let dist = rand(40, CFG.TOWN_RADIUS * 0.9);
@@ -400,8 +376,6 @@ function update(dt) {
 
   // Remove long-dead zombies
   zombies = zombies.filter(z => !(z.dead && z.deathTimer > 15));
-
-  updateRemainingUI();
 
   // Clouds
   for (let c of clouds) {
@@ -515,12 +489,6 @@ function drawScene() {
       case 'particle': drawParticle(item.obj, item.proj); break;
       case 'cloud': drawCloud(item.obj, item.proj); break;
     }
-  }
-
-  // Zombies drawn last so they can't hide behind buildings
-  for (let z of zombies) {
-    let p = project(z.x, z.height / 2, z.z);
-    if (p) drawZombie(z, p);
   }
 
   // Vignette for mood
