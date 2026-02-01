@@ -88,7 +88,7 @@ let kills = 0;
 let streak = 0;
 let bestStreak = 0;
 let zoom = 1;
-let yaw = 0, pitch = -0.4;
+let yaw = 0, pitch = 0.4;
 let mouseX = 0, mouseY = 0;
 let hintTimer = 8000;
 let muzzleFlash = 0;
@@ -194,28 +194,27 @@ function spawnZombie() {
 // ─── 3D PROJECTION ────────────────────────────────────────
 function project(wx, wy, wz) {
   // Camera at tower top
-  let cx = 0, cy = CFG.TOWER_HEIGHT, cz = 0;
-  let dx = wx - cx, dy = wy - cy, dz = wz - cz;
+  let dx = wx, dy = wy - CFG.TOWER_HEIGHT, dz = wz;
 
-  // Rotate by yaw (horizontal)
-  let cosY = Math.cos(-yaw), sinY = Math.sin(-yaw);
-  let rx = dx * cosY - dz * sinY;
-  let rz = dx * sinY + dz * cosY;
-  let ry = dy;
+  // Yaw rotation (around Y axis)
+  let cy = Math.cos(yaw), sy2 = Math.sin(yaw);
+  let ex = dx * cy + dz * sy2;
+  let ez = -dx * sy2 + dz * cy;
+  let ey = dy;
 
-  // Rotate by pitch (vertical)
-  let cosP = Math.cos(-pitch), sinP = Math.sin(-pitch);
-  let ry2 = ry * cosP - rz * sinP;
-  let rz2 = ry * sinP + rz * cosP;
+  // Pitch rotation (around X axis)
+  let cp = Math.cos(pitch), sp = Math.sin(pitch);
+  let fy = ey * cp - ez * sp;
+  let fz = ey * sp + ez * cp;
 
-  if (rz2 <= 1) return null; // behind camera
+  if (fz <= 1) return null; // behind camera
 
   let fov = CFG.VIEW_FOV / zoom;
   let scale = (H / 2) / Math.tan((fov * Math.PI / 180) / 2);
-  let sx = W / 2 - (rx / rz2) * scale;
-  let sy = H / 2 - (ry2 / rz2) * scale;
+  let sx = W / 2 + (ex / fz) * scale;
+  let sy = H / 2 - (fy / fz) * scale;
 
-  return { x: sx, y: sy, depth: rz2, scale: scale / rz2 };
+  return { x: sx, y: sy, depth: fz, scale: scale / fz };
 }
 
 // ─── UPDATE ────────────────────────────────────────────────
@@ -601,7 +600,7 @@ function drawScope() {
 function shoot() {
   muzzleFlash = 1;
   recoilT = 1;
-  pitch += 0.008 / zoom; // slight recoil
+  pitch -= 0.008 / zoom; // slight recoil
 
   // Play shot sound
   playSound('shot');
@@ -748,9 +747,10 @@ function playSound(type) {
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
   let sensitivity = 0.003 / zoom;
-  yaw -= e.movementX * sensitivity;
-  pitch += e.movementY * sensitivity;
-  pitch = clamp(pitch, -Math.PI / 2 + 0.05, 0.3);
+  // Push mouse right → aim right, push mouse down → aim down
+  yaw += e.movementX * sensitivity;
+  pitch -= e.movementY * sensitivity;
+  pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.05);
 });
 
 document.addEventListener('wheel', (e) => {
