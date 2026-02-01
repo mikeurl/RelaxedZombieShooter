@@ -748,7 +748,7 @@ document.addEventListener('mousemove', (e) => {
   if (!started) return;
   let sensitivity = 0.003 / zoom;
   // Push mouse right → aim right, push mouse down → aim down
-  yaw += e.movementX * sensitivity;
+  yaw -= e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
   pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.05);
 });
