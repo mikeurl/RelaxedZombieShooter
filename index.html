@@ -212,7 +212,7 @@ function project(wx, wy, wz) {
 
   let fov = CFG.VIEW_FOV / zoom;
   let scale = (H / 2) / Math.tan((fov * Math.PI / 180) / 2);
-  let sx = W / 2 + (rx / rz2) * scale;
+  let sx = W / 2 - (rx / rz2) * scale;
   let sy = H / 2 - (ry2 / rz2) * scale;
 
   return { x: sx, y: sy, depth: rz2, scale: scale / rz2 };
