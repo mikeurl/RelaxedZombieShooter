@@ -565,86 +565,36 @@ function drawCloud(c, p) {
 }
 
 function drawScope() {
-  // Scope vignette
   let cx = W / 2, cy = H / 2;
-  let scopeR = Math.min(W, H) * 0.48;
+  let len = Math.min(W, H) * 0.3;
+  let gap = 14;
 
-  // Dark border around scope
-  ctx.save();
+  // Crosshair lines
+  ctx.strokeStyle = 'rgba(200,255,200,0.6)';
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.rect(0, 0, W, H);
-  ctx.arc(cx, cy, scopeR, 0, Math.PI * 2, true);
-  ctx.fillStyle = 'rgba(0,0,0,0.92)';
-  ctx.fill();
-  ctx.restore();
-
-  // Scope edge ring
-  ctx.beginPath();
-  ctx.arc(cx, cy, scopeR, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(40,40,40,0.8)';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  // Inner ring (lens edge)
-  ctx.beginPath();
-  ctx.arc(cx, cy, scopeR - 2, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(60,60,60,0.4)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Crosshair
-  let chLen = scopeR * 0.7;
-  let gap = 12;
-  ctx.strokeStyle = 'rgba(200,255,200,0.5)';
-  ctx.lineWidth = 1;
-
-  // Horizontal lines
-  ctx.beginPath();
-  ctx.moveTo(cx - chLen, cy); ctx.lineTo(cx - gap, cy);
-  ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + chLen, cy);
-  // Vertical lines
-  ctx.moveTo(cx, cy - chLen); ctx.lineTo(cx, cy - gap);
-  ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + chLen);
+  ctx.moveTo(cx - len, cy); ctx.lineTo(cx - gap, cy);
+  ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + len, cy);
+  ctx.moveTo(cx, cy - len); ctx.lineTo(cx, cy - gap);
+  ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + len);
   ctx.stroke();
 
   // Center dot
   ctx.beginPath();
   ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(200,255,200,0.7)';
+  ctx.fillStyle = 'rgba(200,255,200,0.8)';
   ctx.fill();
-
-  // Mil-dots on crosshair
-  for (let i = 1; i <= 5; i++) {
-    let off = gap + i * (chLen - gap) / 6;
-    ctx.beginPath();
-    ctx.arc(cx + off, cy, 1.5, 0, Math.PI * 2);
-    ctx.arc(cx - off, cy, 1.5, 0, Math.PI * 2);
-    ctx.arc(cx, cy + off, 1.5, 0, Math.PI * 2);
-    ctx.arc(cx, cy - off, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(200,255,200,0.35)';
-    ctx.fill();
-  }
 
   // Zoom indicator
   ctx.fillStyle = 'rgba(200,255,200,0.4)';
   ctx.font = '12px Courier New';
-  ctx.fillText(`${zoom.toFixed(1)}x`, cx + scopeR * 0.6, cy + scopeR * 0.85);
+  ctx.fillText(`${zoom.toFixed(1)}x`, cx + 30, cy + 30);
 
   // Muzzle flash overlay
   if (muzzleFlash > 0) {
     ctx.fillStyle = `rgba(255,240,200,${muzzleFlash * 0.08})`;
     ctx.fillRect(0, 0, W, H);
   }
-
-  // Subtle lens tint
-  let lensGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, scopeR);
-  lensGrad.addColorStop(0, 'rgba(0,20,0,0)');
-  lensGrad.addColorStop(0.8, 'rgba(0,15,0,0.03)');
-  lensGrad.addColorStop(1, 'rgba(0,10,0,0.1)');
-  ctx.beginPath();
-  ctx.arc(cx, cy, scopeR, 0, Math.PI * 2);
-  ctx.fillStyle = lensGrad;
-  ctx.fill();
 }
 
 // ─── SHOOTING ──────────────────────────────────────────────
@@ -800,7 +750,7 @@ document.addEventListener('mousemove', (e) => {
   let sensitivity = 0.002 / zoom;
   yaw += e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
-  pitch = clamp(pitch, -0.8, 0.1);
+  pitch = clamp(pitch, -1.4, 0.1);
 });
 
 document.addEventListener('wheel', (e) => {
