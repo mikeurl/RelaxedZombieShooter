@@ -198,7 +198,7 @@ function project(wx, wy, wz) {
   let dx = wx - cx, dy = wy - cy, dz = wz - cz;
 
   // Rotate by yaw (horizontal)
-  let cosY = Math.cos(-yaw), sinY = Math.sin(-yaw);
+  let cosY = Math.cos(yaw), sinY = Math.sin(yaw);
   let rx = dx * cosY - dz * sinY;
   let rz = dx * sinY + dz * cosY;
   let ry = dy;
@@ -748,7 +748,7 @@ function playSound(type) {
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
   let sensitivity = 0.003 / zoom;
-  yaw -= e.movementX * sensitivity;
+  yaw += e.movementX * sensitivity;
   pitch += e.movementY * sensitivity;
   pitch = clamp(pitch, -Math.PI / 2 + 0.05, 0.3);
 });
