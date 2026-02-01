@@ -622,10 +622,11 @@ function shoot() {
     let headP = project(z.x, z.height, z.z);
     if (!baseP || !headP) continue;
 
-    let dx = W / 2 - p.x;
-    let dy = H / 2 - p.y;
+    let cx = W / 2;
+    let cy = H / 2;
+    let dx = cx - p.x;
 
-    if (Math.abs(dx) < bodyW && dy > headP.y - H / 2 - bodyH * 0.15 && dy < baseP.y - H / 2) {
+    if (Math.abs(dx) < bodyW && cy > headP.y - bodyH * 0.15 && cy < baseP.y) {
       if (p.depth < closestDist) {
         closestDist = p.depth;
         closestZ = z;
