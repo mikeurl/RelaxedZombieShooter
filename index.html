@@ -748,7 +748,7 @@ function playSound(type) {
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
   let sensitivity = 0.003 / zoom;
-  yaw += e.movementX * sensitivity;
+  yaw -= e.movementX * sensitivity;
   pitch += e.movementY * sensitivity;
   pitch = clamp(pitch, -Math.PI / 2 + 0.05, 0.3);
 });
