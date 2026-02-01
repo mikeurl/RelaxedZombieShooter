@@ -20,6 +20,29 @@ canvas { display: block; }
   text-shadow: 0 0 6px rgba(0,0,0,0.8);
 }
 
+#round-info {
+  position: absolute; top: 20px; left: 30px;
+  color: rgba(200,255,200,0.7); font-size: 16px; text-align: left;
+  text-shadow: 0 0 6px rgba(0,0,0,0.8);
+  pointer-events: auto;
+}
+
+#music-toggle {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid rgba(200,255,200,0.5);
+  border-radius: 6px;
+  background: rgba(10,20,10,0.6);
+  color: rgba(200,255,200,0.85);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+#music-toggle:hover {
+  background: rgba(20,40,20,0.7);
+}
+
 #hint {
   position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
   color: rgba(200,255,200,0.5); font-size: 14px;
@@ -54,6 +77,11 @@ canvas { display: block; }
   <div id="score">
     <div>KILLS: <span id="kills">0</span></div>
     <div>STREAK: <span id="streak">0</span></div>
+  </div>
+  <div id="round-info">
+    <div>ROUND: <span id="round">1</span></div>
+    <div>LEFT: <span id="remaining">0</span></div>
+    <button id="music-toggle">MUSIC: OFF</button>
   </div>
   <div id="hint">Click to shoot &bull; Move mouse to aim &bull; Scroll to zoom</div>
   <div id="title-screen">
@@ -193,6 +221,36 @@ function generateWorld() {
       h: rand(8, 20),
       speed: rand(0.3, 1.2),
     });
+  }
+
+  updateRoundUI();
+  updateRemainingUI();
+}
+
+function zombieCountForRound() {
+  return CFG.ZOMBIE_COUNT + Math.floor((round - 1) * 4);
+}
+
+function applyRoundTheme() {
+  themeIndex = (round - 1) % THEMES.length;
+}
+
+function startNextRound() {
+  round += 1;
+  applyRoundTheme();
+  generateWorld();
+}
+
+function updateRoundUI() {
+  const roundEl = document.getElementById('round');
+  if (roundEl) roundEl.textContent = round;
+}
+
+function updateRemainingUI() {
+  const remainingEl = document.getElementById('remaining');
+  if (remainingEl) {
+    const remaining = zombies.filter(z => !z.dead).length;
+    remainingEl.textContent = remaining;
   }
 }
 
@@ -378,23 +436,18 @@ function drawScene() {
     if (p) drawList.push({ type: 'building', obj: b, depth: p.depth, proj: p });
   }
 
+  // Particles
+  for (let p of particles) {
+    let pp = project(p.x, p.y, p.z);
+    if (pp) drawList.push({ type: 'particle', obj: p, depth: pp.depth, proj: pp });
+  }
+
   // Trees
   for (let t of trees) {
     let p = project(t.x, t.h / 2, t.z);
     if (p) drawList.push({ type: 'tree', obj: t, depth: p.depth, proj: p });
   }
 
-  // Zombies
-  for (let z of zombies) {
-    let p = project(z.x, z.height / 2, z.z);
-    if (p) drawList.push({ type: 'zombie', obj: z, depth: p.depth, proj: p });
-  }
-
-  // Particles
-  for (let p of particles) {
-    let pp = project(p.x, p.y, p.z);
-    if (pp) drawList.push({ type: 'particle', obj: p, depth: pp.depth, proj: pp });
-  }
 
   // Clouds (drawn after sorting)
   for (let c of clouds) {
@@ -696,6 +749,7 @@ function shoot() {
     if (streak > bestStreak) bestStreak = streak;
     document.getElementById('kills').textContent = kills;
     document.getElementById('streak').textContent = streak;
+    updateRemainingUI();
 
     // Blood particles
     for (let i = 0; i < 8; i++) {
@@ -798,6 +852,49 @@ function playSound(type) {
   }
 }
 
+function toggleMusic() {
+  if (!audioCtx) initAudio();
+  const button = document.getElementById('music-toggle');
+  if (!musicOn) {
+    musicOsc = audioCtx.createOscillator();
+    let bassOsc = audioCtx.createOscillator();
+    const bassGain = audioCtx.createGain();
+    musicGain = audioCtx.createGain();
+    musicOsc.type = 'triangle';
+    musicOsc.frequency.value = 110;
+    bassOsc.type = 'sine';
+    bassOsc.frequency.value = 55;
+    musicGain.gain.value = 0.05;
+    bassGain.gain.value = 0.08;
+
+    musicOsc.connect(musicGain);
+    bassOsc.connect(bassGain);
+    musicGain.connect(audioCtx.destination);
+    bassGain.connect(audioCtx.destination);
+
+    musicOsc.start();
+    bassOsc.start();
+    musicOsc.bassOsc = bassOsc;
+    musicOsc.bassGain = bassGain;
+
+    musicOn = true;
+    if (button) button.textContent = 'MUSIC: ON';
+  } else {
+    if (musicOsc) {
+      if (musicOsc.bassOsc) {
+        musicOsc.bassOsc.stop();
+        musicOsc.bassGain.disconnect();
+      }
+      musicOsc.stop();
+      musicGain.disconnect();
+      musicOsc = null;
+      musicGain = null;
+    }
+    musicOn = false;
+    if (button) button.textContent = 'MUSIC: OFF';
+  }
+}
+
 // ─── INPUT ─────────────────────────────────────────────────
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
@@ -829,6 +926,11 @@ document.addEventListener('mousedown', (e) => {
     }
     shoot();
   }
+});
+
+document.getElementById('music-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleMusic();
 });
 
 document.addEventListener('keydown', (e) => {
