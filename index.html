@@ -88,7 +88,7 @@ let kills = 0;
 let streak = 0;
 let bestStreak = 0;
 let zoom = 2;
-let yaw = 0, pitch = -0.25;
+let yaw = 0, pitch = -0.6;
 let mouseX = 0, mouseY = 0;
 let hintTimer = 8000;
 let muzzleFlash = 0;
@@ -750,7 +750,7 @@ document.addEventListener('mousemove', (e) => {
   let sensitivity = 0.002 / zoom;
   yaw += e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
-  pitch = clamp(pitch, -1.4, 0.1);
+  pitch = clamp(pitch, -Math.PI / 2 + 0.05, 0.3);
 });
 
 document.addEventListener('wheel', (e) => {
