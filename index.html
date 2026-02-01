@@ -20,6 +20,29 @@ canvas { display: block; }
   text-shadow: 0 0 6px rgba(0,0,0,0.8);
 }
 
+#round-info {
+  position: absolute; top: 20px; left: 30px;
+  color: rgba(200,255,200,0.7); font-size: 16px; text-align: left;
+  text-shadow: 0 0 6px rgba(0,0,0,0.8);
+  pointer-events: auto;
+}
+
+#music-toggle {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid rgba(200,255,200,0.5);
+  border-radius: 6px;
+  background: rgba(10,20,10,0.6);
+  color: rgba(200,255,200,0.85);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+#music-toggle:hover {
+  background: rgba(20,40,20,0.7);
+}
+
 #hint {
   position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
   color: rgba(200,255,200,0.5); font-size: 14px;
@@ -54,6 +77,11 @@ canvas { display: block; }
   <div id="score">
     <div>KILLS: <span id="kills">0</span></div>
     <div>STREAK: <span id="streak">0</span></div>
+  </div>
+  <div id="round-info">
+    <div>ROUND: <span id="round">1</span></div>
+    <div>LEFT: <span id="remaining">0</span></div>
+    <button id="music-toggle">MUSIC: OFF</button>
   </div>
   <div id="hint">Click to shoot &bull; Move mouse to aim &bull; Scroll to zoom</div>
   <div id="title-screen">
@@ -93,6 +121,70 @@ let mouseX = 0, mouseY = 0;
 let hintTimer = 8000;
 let muzzleFlash = 0;
 let recoilT = 0;
+let round = 1;
+let themeIndex = 0;
+let musicOn = false;
+let musicOsc = null;
+let musicGain = null;
+let zombieSprite = null;
+const ZOMBIE_SPRITE = [
+  "................",
+  "....KKKKKK......",
+  "...KGGGGGGK.....",
+  "..KGGGGGGGGK....",
+  "..KGGYYYYGGK....",
+  "..KGGYYYYGGK....",
+  "..KGGGGGGGGK....",
+  "..KGGgGGgGGK....",
+  "...KGGGGGGK.....",
+  "....KKKKKK......",
+  ".....KKKK.......",
+  "..KBBBBBBBBK....",
+  "..KBBBBBBBBK....",
+  "..KBBBBBBBBK....",
+  "..KBBBBBBBBK....",
+  "..KBBBBBBBBK....",
+  "...KBBBBBBK.....",
+  "....KBBBBK......",
+  "....KDDDDK......",
+  "...KDDDDDDK.....",
+  "..KDD..DDDK.....",
+  "..KDD..DDDK.....",
+  "..KDD..DDDK.....",
+  "...KK...KK......",
+];
+const ZOMBIE_PALETTE = {
+  K: "#111111",
+  G: "#6fa354",
+  g: "#4d7b3a",
+  B: "#6b4f2a",
+  D: "#3b4d78",
+  Y: "#d9b447",
+};
+
+const THEMES = [
+  {
+    sky: ['#151525', '#23203d', '#3b2445', '#2a1520'],
+    ground: ['#2a3a20', '#1a2a15'],
+    stars: 'rgba(255,255,255,0.45)',
+    clouds: 'rgba(70,60,80,0.35)',
+    moon: 'rgba(240,230,200,0.9)',
+  },
+  {
+    sky: ['#0b1a2b', '#17334d', '#2b3f4d', '#1a2430'],
+    ground: ['#223833', '#132826'],
+    stars: 'rgba(200,230,255,0.4)',
+    clouds: 'rgba(80,100,120,0.35)',
+    moon: 'rgba(200,220,255,0.9)',
+  },
+  {
+    sky: ['#2a120f', '#3c1d1c', '#5a2a24', '#2a1511'],
+    ground: ['#3b2d1c', '#21170f'],
+    stars: 'rgba(255,220,200,0.35)',
+    clouds: 'rgba(90,70,60,0.35)',
+    moon: 'rgba(255,210,180,0.85)',
+  },
+];
 
 // World objects
 let zombies = [];
@@ -114,6 +206,28 @@ function rand(a, b) { return a + Math.random() * (b - a); }
 function randInt(a, b) { return Math.floor(rand(a, b)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function buildZombieSprite() {
+  const spriteH = ZOMBIE_SPRITE.length;
+  const spriteW = ZOMBIE_SPRITE[0].length;
+  const canvas = document.createElement('canvas');
+  canvas.width = spriteW;
+  canvas.height = spriteH;
+  const cctx = canvas.getContext('2d');
+  cctx.clearRect(0, 0, spriteW, spriteH);
+
+  for (let y = 0; y < spriteH; y++) {
+    const row = ZOMBIE_SPRITE[y];
+    for (let x = 0; x < spriteW; x++) {
+      const key = row[x];
+      if (key === '.') continue;
+      cctx.fillStyle = ZOMBIE_PALETTE[key] || '#000000';
+      cctx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  zombieSprite = canvas;
+}
 
 // ─── WORLD GENERATION ──────────────────────────────────────
 function generateWorld() {
@@ -153,7 +267,7 @@ function generateWorld() {
   }
 
   // Zombies
-  for (let i = 0; i < CFG.ZOMBIE_COUNT; i++) {
+  for (let i = 0; i < zombieCountForRound(); i++) {
     spawnZombie();
   }
 
@@ -167,6 +281,36 @@ function generateWorld() {
       h: rand(8, 20),
       speed: rand(0.3, 1.2),
     });
+  }
+
+  updateRoundUI();
+  updateRemainingUI();
+}
+
+function zombieCountForRound() {
+  return CFG.ZOMBIE_COUNT + Math.floor((round - 1) * 4);
+}
+
+function applyRoundTheme() {
+  themeIndex = (round - 1) % THEMES.length;
+}
+
+function startNextRound() {
+  round += 1;
+  applyRoundTheme();
+  generateWorld();
+}
+
+function updateRoundUI() {
+  const roundEl = document.getElementById('round');
+  if (roundEl) roundEl.textContent = round;
+}
+
+function updateRemainingUI() {
+  const remainingEl = document.getElementById('remaining');
+  if (remainingEl) {
+    const remaining = zombies.filter(z => !z.dead).length;
+    remainingEl.textContent = remaining;
   }
 }
 
@@ -222,6 +366,12 @@ let lastTime = 0;
 function update(dt) {
   if (!started) return;
 
+  const allDead = zombies.length > 0 && zombies.every(z => z.dead);
+  if (allDead) {
+    startNextRound();
+    return;
+  }
+
   // Update zombies
   for (let z of zombies) {
     if (z.dead) {
@@ -248,14 +398,10 @@ function update(dt) {
     }
   }
 
-  // Remove long-dead zombies and respawn
-  zombies = zombies.filter(z => {
-    if (z.dead && z.deathTimer > 15) {
-      spawnZombie();
-      return false;
-    }
-    return true;
-  });
+  // Remove long-dead zombies
+  zombies = zombies.filter(z => !(z.dead && z.deathTimer > 15));
+
+  updateRemainingUI();
 
   // Clouds
   for (let c of clouds) {
@@ -288,17 +434,18 @@ function update(dt) {
 
 // ─── DRAW ──────────────────────────────────────────────────
 function drawScene() {
+  const theme = THEMES[themeIndex] || THEMES[0];
   // Sky gradient
   let sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#1a1a2e');
-  sky.addColorStop(0.4, '#2d1b3d');
-  sky.addColorStop(0.7, '#4a2040');
-  sky.addColorStop(1, '#2a1520');
+  sky.addColorStop(0, theme.sky[0]);
+  sky.addColorStop(0.4, theme.sky[1]);
+  sky.addColorStop(0.7, theme.sky[2]);
+  sky.addColorStop(1, theme.sky[3]);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
   // Stars
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillStyle = theme.stars;
   for (let i = 0; i < 80; i++) {
     let sx = (Math.sin(i * 127.1) * 0.5 + 0.5) * W;
     let sy = (Math.cos(i * 311.7) * 0.3 + 0.1) * H;
@@ -311,8 +458,12 @@ function drawScene() {
     let mr = 30 * moonP.scale;
     if (mr > 2) {
       ctx.beginPath();
+      ctx.arc(moonP.x, moonP.y, mr * 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fill();
+      ctx.beginPath();
       ctx.arc(moonP.x, moonP.y, mr, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(240,230,200,0.9)';
+      ctx.fillStyle = theme.moon;
       ctx.fill();
       ctx.beginPath();
       ctx.arc(moonP.x + mr * 0.25, moonP.y - mr * 0.1, mr * 0.85, 0, Math.PI * 2);
@@ -333,23 +484,18 @@ function drawScene() {
     if (p) drawList.push({ type: 'building', obj: b, depth: p.depth, proj: p });
   }
 
+  // Particles
+  for (let p of particles) {
+    let pp = project(p.x, p.y, p.z);
+    if (pp) drawList.push({ type: 'particle', obj: p, depth: pp.depth, proj: pp });
+  }
+
   // Trees
   for (let t of trees) {
     let p = project(t.x, t.h / 2, t.z);
     if (p) drawList.push({ type: 'tree', obj: t, depth: p.depth, proj: p });
   }
 
-  // Zombies
-  for (let z of zombies) {
-    let p = project(z.x, z.height / 2, z.z);
-    if (p) drawList.push({ type: 'zombie', obj: z, depth: p.depth, proj: p });
-  }
-
-  // Particles
-  for (let p of particles) {
-    let pp = project(p.x, p.y, p.z);
-    if (pp) drawList.push({ type: 'particle', obj: p, depth: pp.depth, proj: pp });
-  }
 
   // Clouds (drawn after sorting)
   for (let c of clouds) {
@@ -370,9 +516,23 @@ function drawScene() {
       case 'cloud': drawCloud(item.obj, item.proj); break;
     }
   }
+
+  // Zombies drawn last so they can't hide behind buildings
+  for (let z of zombies) {
+    let p = project(z.x, z.height / 2, z.z);
+    if (p) drawZombie(z, p);
+  }
+
+  // Vignette for mood
+  let vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.7);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, W, H);
 }
 
 function drawGround() {
+  const theme = THEMES[themeIndex];
   // Render ground as grid of projected points
   let groundColor = '#2a3a20';
   let roadColor = '#3a3a35';
@@ -393,8 +553,8 @@ function drawGround() {
   }
   if (maxY > minY) {
     let grd = ctx.createLinearGradient(0, minY, 0, maxY);
-    grd.addColorStop(0, '#2a3a20');
-    grd.addColorStop(1, '#1a2a15');
+    grd.addColorStop(0, theme.ground[0]);
+    grd.addColorStop(1, theme.ground[1]);
     ctx.fillStyle = grd;
     ctx.fillRect(0, minY, W, maxY - minY + 50);
   }
@@ -497,6 +657,18 @@ function drawZombie(z, p) {
     return;
   }
 
+  if (zombieSprite) {
+    const spriteH = zombieSprite.height;
+    const spriteW = zombieSprite.width;
+    const drawH = bodyH * 1.2;
+    const drawW = drawH * (spriteW / spriteH);
+    const drawX = baseP.x - drawW / 2;
+    const drawY = baseP.y - drawH;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(zombieSprite, drawX, drawY, drawW, drawH);
+    return;
+  }
+
   let limbOff = Math.sin(z.limbPhase) * bodyH * 0.08;
 
   // Legs
@@ -554,12 +726,13 @@ function drawParticle(p, pp) {
 }
 
 function drawCloud(c, p) {
+  const theme = THEMES[themeIndex];
   let s = p.scale;
   let cw = c.w * s;
   let ch = c.h * s;
   ctx.beginPath();
   ctx.ellipse(p.x, p.y, Math.max(2, cw / 2), Math.max(1, ch / 2), 0, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(60,50,70,0.3)';
+  ctx.fillStyle = theme.clouds;
   ctx.fill();
 }
 
@@ -622,10 +795,11 @@ function shoot() {
     let headP = project(z.x, z.height, z.z);
     if (!baseP || !headP) continue;
 
-    let dx = W / 2 - p.x;
-    let dy = H / 2 - p.y;
+    let cx = W / 2;
+    let cy = H / 2;
+    let dx = cx - p.x;
 
-    if (Math.abs(dx) < bodyW && dy > headP.y - H / 2 - bodyH * 0.15 && dy < baseP.y - H / 2) {
+    if (Math.abs(dx) < bodyW && cy > headP.y - bodyH * 0.15 && cy < baseP.y) {
       if (p.depth < closestDist) {
         closestDist = p.depth;
         closestZ = z;
@@ -641,6 +815,7 @@ function shoot() {
     if (streak > bestStreak) bestStreak = streak;
     document.getElementById('kills').textContent = kills;
     document.getElementById('streak').textContent = streak;
+    updateRemainingUI();
 
     // Blood particles
     for (let i = 0; i < 8; i++) {
@@ -743,12 +918,55 @@ function playSound(type) {
   }
 }
 
+function toggleMusic() {
+  if (!audioCtx) initAudio();
+  const button = document.getElementById('music-toggle');
+  if (!musicOn) {
+    musicOsc = audioCtx.createOscillator();
+    let bassOsc = audioCtx.createOscillator();
+    const bassGain = audioCtx.createGain();
+    musicGain = audioCtx.createGain();
+    musicOsc.type = 'triangle';
+    musicOsc.frequency.value = 110;
+    bassOsc.type = 'sine';
+    bassOsc.frequency.value = 55;
+    musicGain.gain.value = 0.05;
+    bassGain.gain.value = 0.08;
+
+    musicOsc.connect(musicGain);
+    bassOsc.connect(bassGain);
+    musicGain.connect(audioCtx.destination);
+    bassGain.connect(audioCtx.destination);
+
+    musicOsc.start();
+    bassOsc.start();
+    musicOsc.bassOsc = bassOsc;
+    musicOsc.bassGain = bassGain;
+
+    musicOn = true;
+    if (button) button.textContent = 'MUSIC: ON';
+  } else {
+    if (musicOsc) {
+      if (musicOsc.bassOsc) {
+        musicOsc.bassOsc.stop();
+        musicOsc.bassGain.disconnect();
+      }
+      musicOsc.stop();
+      musicGain.disconnect();
+      musicOsc = null;
+      musicGain = null;
+    }
+    musicOn = false;
+    if (button) button.textContent = 'MUSIC: OFF';
+  }
+}
+
 // ─── INPUT ─────────────────────────────────────────────────
 document.addEventListener('mousemove', (e) => {
   if (!started) return;
   let sensitivity = 0.003 / zoom;
   // Push mouse right → aim right, push mouse down → aim down
-  yaw += e.movementX * sensitivity;
+  yaw -= e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
   pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.05);
 });
@@ -776,6 +994,14 @@ document.addEventListener('mousedown', (e) => {
   }
 });
 
+const musicToggle = document.getElementById('music-toggle');
+if (musicToggle) {
+  musicToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMusic();
+  });
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.pointerLockElement) {
     document.exitPointerLock();
@@ -783,6 +1009,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ─── MAIN LOOP ─────────────────────────────────────────────
+buildZombieSprite();
+applyRoundTheme();
 generateWorld();
 
 function gameLoop(time) {
