@@ -113,32 +113,39 @@ function buildZombieSprite() {
     const img = new Image();
     img.src = 'zombie.png';
     img.onload = () => {
-        // Determine the background color to remove: (176, 177, 181)
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = img.width;
-        tempCanvas.height = img.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(img, 0, 0);
+        try {
+            // Determine the background color to remove: (176, 177, 181)
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
 
-        const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
-        const data = imageData.data;
+            const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+            const data = imageData.data;
 
-        // Iterate through pixels to remove the background color
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
+            // Iterate through pixels to remove the background color
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
 
-            // Check if pixel matches the background (light grey/white checkerboard pattern)
-            // Analysis showed background B > 170, while Zombie B < 140.
-            // Using > 150 as a safe threshold for all channels to target light greys.
-            if (r > 150 && g > 150 && b > 150) {
-                data[i + 3] = 0; // Set alpha to 0 (transparent)
+                // Check if pixel matches the background (light grey/white checkerboard pattern)
+                // Analysis showed background B > 170, while Zombie B < 140.
+                // Using > 150 as a safe threshold for all channels to target light greys.
+                if (r > 150 && g > 150 && b > 150) {
+                    data[i + 3] = 0; // Set alpha to 0 (transparent)
+                }
             }
-        }
 
-        tempCtx.putImageData(imageData, 0, 0);
-        zombieSprite = tempCanvas;
+            tempCtx.putImageData(imageData, 0, 0);
+            zombieSprite = tempCanvas;
+        } catch (e) {
+            // If running locally (file://), getImageData throws SecurityError.
+            // Fallback to using the raw image.
+            console.warn("Transparency processing failed (CORS/file://). Using raw image.");
+            zombieSprite = img;
+        }
     };
 }
 
