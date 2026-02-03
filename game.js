@@ -10,6 +10,11 @@ const CFG = {
     TOWN_RADIUS: 500,
     GROUND_Y: 0,
     BUILDING_COUNT: 18,
+    BLOCK_SIZE: 90,
+    STREET_WIDTH: 24,
+    DOWNTOWN_RADIUS: 180,
+    MIDTOWN_RADIUS: 320,
+    BACKDROP_RADIUS: 760,
 };
 
 // ─── STATE ─────────────────────────────────────────────────
@@ -94,6 +99,7 @@ let particles = [];
 let bushes = [];
 let fences = [];
 let roads = [];
+let backdrops = [];
 
 // ─── RESIZE ────────────────────────────────────────────────
 function resize() {
@@ -108,6 +114,8 @@ function rand(a, b) { return a + Math.random() * (b - a); }
 function randInt(a, b) { return Math.floor(rand(a, b)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function fogAlpha(depth) { return clamp((depth - 180) / 700, 0, 0.7); }
 
 function buildZombieSprite() {
     const img = new Image();
@@ -129,48 +137,16 @@ function generateWorld() {
     clouds = [];
     particles = [];
     roads = [];
+    backdrops = [];
 
-    // ─── STRICT GRID LAYOUT ──────────────────────────────
+    // ─── STRUCTURED TOWN LAYOUT ───────────────────────────
+    createRoadGrid();
+    createTownCore();
+    createResidentialRing();
+    createIndustrialLots();
+    createBackdropTown();
 
-    // 1. Roads (Main Axes)
-    roads.push({ x: 0, z: 0, w: 40, h: CFG.TOWN_RADIUS * 2.2, type: 'road' });
-    roads.push({ x: 0, z: 0, w: CFG.TOWN_RADIUS * 2.2, h: 40, type: 'road' });
-
-    // 2. Town Center (Inner Grid)
-    // Grid cells: 60x60
-    let gridSize = 60;
-    for (let gx = -2; gx <= 2; gx++) {
-        for (let gz = -2; gz <= 2; gz++) {
-            // Skip road overlap (center lines)
-            if (gx === 0 || gz === 0) continue;
-
-            let cx = gx * gridSize * 1.5; // Spread out a bit
-            let cz = gz * gridSize * 1.5;
-
-            // Randomly place a building in this cell
-            if (Math.random() > 0.3) {
-                let type = Math.random() < 0.3 ? 'shop' : 'house';
-                let h = type === 'shop' ? rand(20, 35) : rand(15, 25);
-                let color = type === 'shop' ?
-                    `hsl(${randInt(200, 230)}, ${randInt(10, 30)}%, ${randInt(40, 60)}%)` :
-                    `hsl(${randInt(20, 50)}, ${randInt(10, 30)}%, ${randInt(70, 90)}%)`;
-
-                // Align to face road? (Simplified: just axis aligned boxes)
-                let w = rand(30, 40);
-                let d = rand(30, 40);
-
-                buildings.push({
-                    x: cx, z: cz,
-                    w: w, d: d, h: h,
-                    type: type,
-                    color: color,
-                    roofColor: `hsl(${randInt(0, 30)}, ${randInt(30, 50)}%, ${randInt(20, 35)}%)`
-                });
-            }
-        }
-    }
-
-    // 3. Farm Outskirts (Outer Lots)
+    // ─── Farm Outskirts (Outer Lots) ─────────────────────
     // Large lots: 200x200
     // Quadrants, skipping the town center area
     let farmLots = [
@@ -219,6 +195,202 @@ function generateWorld() {
 
     updateRoundUI();
     updateRemainingUI();
+}
+
+function createRoadGrid() {
+    const mainLen = CFG.TOWN_RADIUS * 2.2;
+    const mainWidth = CFG.STREET_WIDTH + 6;
+    roads.push({ x: 0, z: 0, w: mainWidth, h: mainLen, type: 'road' });
+    roads.push({ x: 0, z: 0, w: mainLen, h: mainWidth, type: 'road' });
+
+    const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
+    for (let i = -3; i <= 3; i++) {
+        if (i === 0) continue;
+        let offset = i * spacing;
+        roads.push({ x: offset, z: 0, w: CFG.STREET_WIDTH, h: mainLen * 0.95, type: 'road' });
+        roads.push({ x: 0, z: offset, w: mainLen * 0.95, h: CFG.STREET_WIDTH, type: 'road' });
+    }
+}
+
+function createTownCore() {
+    const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
+    for (let gx = -3; gx <= 3; gx++) {
+        for (let gz = -3; gz <= 3; gz++) {
+            if (gx === 0 && gz === 0) continue;
+            let cx = gx * spacing;
+            let cz = gz * spacing;
+            let dist = Math.hypot(cx, cz);
+            if (dist > CFG.MIDTOWN_RADIUS) continue;
+            createTownBlock(cx, cz, dist < CFG.DOWNTOWN_RADIUS ? 'downtown' : 'midtown');
+        }
+    }
+}
+
+function createResidentialRing() {
+    let rings = 18;
+    for (let i = 0; i < rings; i++) {
+        let angle = (i / rings) * Math.PI * 2 + rand(-0.2, 0.2);
+        let dist = rand(CFG.MIDTOWN_RADIUS + 40, CFG.MIDTOWN_RADIUS + 120);
+        let cx = Math.cos(angle) * dist;
+        let cz = Math.sin(angle) * dist;
+        createNeighborhoodCluster(cx, cz);
+    }
+}
+
+function createIndustrialLots() {
+    let lots = [
+        { x: 420, z: 140 }, { x: -430, z: -120 },
+        { x: 380, z: -260 }, { x: -360, z: 260 }
+    ];
+    for (let lot of lots) {
+        createIndustrialCluster(lot.x + rand(-25, 25), lot.z + rand(-25, 25));
+    }
+}
+
+function createBackdropTown() {
+    let bands = [
+        { count: 18, min: CFG.BACKDROP_RADIUS - 120, max: CFG.BACKDROP_RADIUS },
+        { count: 14, min: CFG.BACKDROP_RADIUS, max: CFG.BACKDROP_RADIUS + 140 },
+    ];
+    for (let band of bands) {
+        for (let i = 0; i < band.count; i++) {
+            let angle = rand(0, Math.PI * 2);
+            let dist = rand(band.min, band.max);
+            backdrops.push({
+                x: Math.cos(angle) * dist,
+                z: Math.sin(angle) * dist,
+                w: rand(40, 90),
+                d: rand(30, 70),
+                h: rand(30, 80),
+                color: pick(['#2b2f3a', '#303744', '#2a2b35', '#333c47']),
+                roofColor: '#1c1f26',
+                type: 'tower',
+                isBackdrop: true
+            });
+        }
+    }
+}
+
+function createTownBlock(cx, cz, zone) {
+    let block = CFG.BLOCK_SIZE;
+    let half = block / 2;
+    let buildingCount = zone === 'downtown' ? 6 : 4;
+    let inset = zone === 'downtown' ? 6 : 10;
+
+    for (let i = 0; i < buildingCount; i++) {
+        let t = (i + 0.5) / buildingCount;
+        let w = zone === 'downtown' ? rand(18, 32) : rand(20, 38);
+        let d = zone === 'downtown' ? rand(18, 28) : rand(24, 36);
+        let x = cx - half + inset + t * (block - inset * 2);
+        let z = cz - half + inset;
+        createBuilding(x, z, w, d, zone);
+    }
+    for (let i = 0; i < buildingCount; i++) {
+        let t = (i + 0.5) / buildingCount;
+        let w = zone === 'downtown' ? rand(18, 32) : rand(20, 38);
+        let d = zone === 'downtown' ? rand(18, 28) : rand(24, 36);
+        let x = cx - half + inset + t * (block - inset * 2);
+        let z = cz + half - inset;
+        createBuilding(x, z, w, d, zone);
+    }
+    for (let i = 0; i < buildingCount - 1; i++) {
+        let t = (i + 0.6) / (buildingCount - 0.2);
+        let w = zone === 'downtown' ? rand(18, 28) : rand(22, 34);
+        let d = zone === 'downtown' ? rand(18, 30) : rand(24, 36);
+        let x = cx - half + inset;
+        let z = cz - half + inset + t * (block - inset * 2);
+        createBuilding(x, z, w, d, zone);
+    }
+    for (let i = 0; i < buildingCount - 1; i++) {
+        let t = (i + 0.6) / (buildingCount - 0.2);
+        let w = zone === 'downtown' ? rand(18, 28) : rand(22, 34);
+        let d = zone === 'downtown' ? rand(18, 30) : rand(24, 36);
+        let x = cx + half - inset;
+        let z = cz - half + inset + t * (block - inset * 2);
+        createBuilding(x, z, w, d, zone);
+    }
+
+    if (zone === 'midtown' && Math.random() > 0.4) {
+        trees.push({
+            x: cx + rand(-10, 10),
+            z: cz + rand(-10, 10),
+            h: rand(18, 30),
+            trunkH: rand(6, 10),
+            radius: rand(10, 16),
+            type: 'oak'
+        });
+    }
+}
+
+function createNeighborhoodCluster(cx, cz) {
+    let count = randInt(4, 7);
+    for (let i = 0; i < count; i++) {
+        let angle = rand(0, Math.PI * 2);
+        let dist = rand(8, 40);
+        let x = cx + Math.cos(angle) * dist;
+        let z = cz + Math.sin(angle) * dist;
+        createBuilding(x, z, rand(24, 36), rand(24, 36), 'residential');
+        if (Math.random() > 0.5) {
+            trees.push({
+                x: x + rand(-6, 6),
+                z: z + rand(-6, 6),
+                h: rand(20, 36),
+                trunkH: rand(6, 12),
+                radius: rand(10, 18),
+                type: Math.random() > 0.5 ? 'oak' : 'pine'
+            });
+        }
+    }
+}
+
+function createIndustrialCluster(cx, cz) {
+    let count = randInt(2, 4);
+    for (let i = 0; i < count; i++) {
+        let x = cx + rand(-35, 35);
+        let z = cz + rand(-35, 35);
+        createBuilding(x, z, rand(50, 80), rand(35, 55), 'industrial');
+    }
+}
+
+function createBuilding(x, z, w, d, zone) {
+    let h;
+    let color;
+    let roofColor;
+    let type = 'house';
+    if (zone === 'downtown') {
+        h = rand(40, 75);
+        type = 'tower';
+        color = `hsl(${randInt(200, 230)}, ${randInt(8, 24)}%, ${randInt(35, 55)}%)`;
+        roofColor = `hsl(${randInt(200, 230)}, ${randInt(10, 22)}%, ${randInt(18, 30)}%)`;
+    } else if (zone === 'industrial') {
+        h = rand(22, 40);
+        type = 'warehouse';
+        color = `hsl(${randInt(30, 60)}, ${randInt(6, 18)}%, ${randInt(30, 45)}%)`;
+        roofColor = `hsl(${randInt(30, 50)}, ${randInt(8, 20)}%, ${randInt(18, 30)}%)`;
+    } else if (zone === 'residential') {
+        h = rand(16, 26);
+        type = 'house';
+        color = `hsl(${randInt(20, 50)}, ${randInt(12, 28)}%, ${randInt(65, 85)}%)`;
+        roofColor = `hsl(${randInt(0, 25)}, ${randInt(30, 50)}%, ${randInt(20, 35)}%)`;
+    } else {
+        h = rand(22, 40);
+        type = Math.random() < 0.3 ? 'shop' : 'house';
+        color = type === 'shop'
+            ? `hsl(${randInt(200, 230)}, ${randInt(10, 30)}%, ${randInt(40, 60)}%)`
+            : `hsl(${randInt(20, 50)}, ${randInt(10, 30)}%, ${randInt(70, 90)}%)`;
+        roofColor = `hsl(${randInt(0, 30)}, ${randInt(30, 50)}%, ${randInt(20, 35)}%)`;
+    }
+
+    buildings.push({
+        x,
+        z,
+        w,
+        d,
+        h,
+        type,
+        color,
+        roofColor
+    });
 }
 
 function createFarmLot(cx, cz) {
@@ -528,6 +700,12 @@ function drawScene() {
         if (p) drawList.push({ type: 'building', obj: b, depth: p.depth, proj: p });
     }
 
+    // Distant skyline
+    for (let b of backdrops) {
+        let p = project(b.x, b.h / 2, b.z);
+        if (p) drawList.push({ type: 'backdrop', obj: b, depth: p.depth, proj: p });
+    }
+
     // Particles
     for (let p of particles) {
         let pp = project(p.x, p.y, p.z);
@@ -571,6 +749,7 @@ function drawScene() {
         switch (item.type) {
             case 'ground': drawGround(); break;
             case 'building': drawBuilding(item.obj, item.proj); break;
+            case 'backdrop': drawBackdrop(item.obj, item.proj); break;
             case 'tree': drawTree(item.obj, item.proj); break;
             case 'bush': drawBush(item.obj, item.proj); break;
             case 'fence': drawFence(item.obj, item.proj); break;
@@ -579,6 +758,8 @@ function drawScene() {
             case 'cloud': drawCloud(item.obj, item.proj); break;
         }
     }
+
+    drawAtmosphere();
 
     // Vignette for mood
     let vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.7);
@@ -589,6 +770,20 @@ function drawScene() {
 
     drawXRayZombies();
     drawNavMarkers();
+}
+
+function drawAtmosphere() {
+    const theme = THEMES[themeIndex];
+    let horizon = H * 0.35;
+    let haze = ctx.createLinearGradient(0, horizon, 0, H);
+    haze.addColorStop(0, `rgba(20,25,35,0)`);
+    haze.addColorStop(0.5, `rgba(20,25,35,0.12)`);
+    haze.addColorStop(1, `rgba(15,18,25,0.35)`);
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, horizon, W, H - horizon);
+
+    ctx.fillStyle = theme.clouds.replace('0.35', '0.18');
+    ctx.fillRect(0, horizon - 40, W, 80);
 }
 
 function drawNavMarkers() {
@@ -933,88 +1128,136 @@ function drawGround() {
 }
 
 function drawBuilding(b, p) {
-    let s = p.scale;
-    let bw = b.w * s;
-    let bh = b.h * s;
-    let bd = b.d * s * 0.5;
+    const theme = THEMES[themeIndex];
+    let x1 = b.x - b.w / 2;
+    let x2 = b.x + b.w / 2;
+    let z1 = b.z - b.d / 2;
+    let z2 = b.z + b.d / 2;
 
-    let baseP = project(b.x, 0, b.z);
-    let topP = project(b.x, b.h, b.z);
-    if (!baseP || !topP) return;
+    let a = project(x1, 0, z1);
+    let b1 = project(x2, 0, z1);
+    let c = project(x2, 0, z2);
+    let d = project(x1, 0, z2);
+    let at = project(x1, b.h, z1);
+    let bt = project(x2, b.h, z1);
+    let ct = project(x2, b.h, z2);
+    let dt = project(x1, b.h, z2);
+    if (!a || !b1 || !c || !d || !at || !bt || !ct || !dt) return;
 
-    // Barn / House / Silo logic
     if (b.type === 'silo') {
-        // Cylinder
-        let r = bw * 0.5;
+        let baseP = project(b.x, 0, b.z);
+        let topP = project(b.x, b.h, b.z);
+        if (!baseP || !topP) return;
+        let r = b.w * p.scale * 0.5;
         ctx.fillStyle = b.color;
         ctx.beginPath();
         ctx.moveTo(baseP.x - r, baseP.y);
         ctx.lineTo(baseP.x - r, topP.y);
-        // dome top
         ctx.arc(baseP.x, topP.y, r, Math.PI, 0);
         ctx.lineTo(baseP.x + r, baseP.y);
         ctx.fill();
-        // Shading
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
         ctx.fillRect(baseP.x, topP.y, r, baseP.y - topP.y);
         return;
     }
 
-    // Box base
-    ctx.fillStyle = b.color;
-    ctx.fillRect(baseP.x - bw / 2, topP.y, bw, baseP.y - topP.y);
+    let viewX = -b.x;
+    let viewZ = -b.z;
+    let useLeft = viewX < 0;
+    let useFront = viewZ < 0;
+    let fog = fogAlpha(p.depth);
 
-    // Roof
-    ctx.fillStyle = b.roofColor;
-    if (b.type === 'barn') {
-        // Gambrel roof
-        let rh = bh * 0.4;
+    function fillFace(points, fill, shadow) {
         ctx.beginPath();
-        ctx.moveTo(baseP.x - bw / 2 - 4, topP.y);
-        ctx.lineTo(baseP.x - bw / 3, topP.y - rh * 0.6);
-        ctx.lineTo(baseP.x, topP.y - rh);
-        ctx.lineTo(baseP.x + bw / 3, topP.y - rh * 0.6);
-        ctx.lineTo(baseP.x + bw / 2 + 4, topP.y);
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = fill;
         ctx.fill();
-    } else {
-        // Simple Pitched roof
-        ctx.beginPath();
-        ctx.moveTo(baseP.x - bw / 2 - 2, topP.y);
-        ctx.lineTo(baseP.x, topP.y - bh * 0.5);
-        ctx.lineTo(baseP.x + bw / 2 + 2, topP.y);
-        ctx.fill();
+        if (shadow) {
+            ctx.fillStyle = shadow;
+            ctx.fill();
+        }
+        if (fog > 0.01) {
+            ctx.fillStyle = `rgba(35,40,55,${fog})`;
+            ctx.fill();
+        }
     }
 
-    // Windows
+    const frontFace = useFront ? [a, b1, bt, at] : [d, c, ct, dt];
+    const sideFace = useLeft ? [d, a, at, dt] : [b1, c, ct, bt];
+    const roofFace = [at, bt, ct, dt];
+
+    fillFace(sideFace, b.color, 'rgba(0,0,0,0.18)');
+    fillFace(frontFace, b.color, 'rgba(0,0,0,0.08)');
+    fillFace(roofFace, b.roofColor, 'rgba(255,255,255,0.05)');
+
+    // Windows (front face only for readability)
     let winRows = Math.floor(b.h / 10);
     let winCols = Math.floor(b.w / 12);
+    let s = p.scale;
     for (let wy = 0; wy < winRows; wy++) {
         for (let wx = 0; wx < winCols; wx++) {
-            let winX = baseP.x - bw / 2 + (wx + 0.5) * (bw / winCols);
-            let winY = topP.y + (wy + 0.5) * ((baseP.y - topP.y) / winRows);
-            let ws = Math.max(2, s * 4);
+            let winX = (frontFace[0].x + frontFace[1].x) / 2 + (wx + 0.5 - winCols / 2) * (b.w * s / winCols);
+            let winY = frontFace[3].y + (wy + 0.5) * ((frontFace[0].y - frontFace[3].y) / winRows);
+            let ws = Math.max(1.5, s * 3.5);
             let lit = Math.sin(b.x * 13 + b.z * 7 + wx * 3 + wy * 5) > 0.3;
-            ctx.fillStyle = lit ? 'rgba(255,200,80,0.6)' : 'rgba(20,20,30,0.8)';
+            ctx.fillStyle = lit ? 'rgba(255,200,80,0.55)' : 'rgba(20,20,30,0.7)';
             ctx.fillRect(winX - ws, winY - ws * 1.2, ws * 2, ws * 2.4);
         }
     }
 
-    // Barn Door
     if (b.type === 'barn') {
-        ctx.fillStyle = '#2a1a10';
-        let dw = bw * 0.3;
-        let dh = bh * 0.4;
-        ctx.fillRect(baseP.x - dw / 2, baseP.y - dh, dw, dh);
-        // X bracing
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(baseP.x - dw / 2, baseP.y - dh);
-        ctx.lineTo(baseP.x + dw / 2, baseP.y);
-        ctx.moveTo(baseP.x + dw / 2, baseP.y - dh);
-        ctx.lineTo(baseP.x - dw / 2, baseP.y);
-        ctx.stroke();
+        let baseP = project(b.x, 0, b.z);
+        if (baseP) {
+            ctx.fillStyle = '#2a1a10';
+            let dw = b.w * p.scale * 0.3;
+            let dh = b.h * p.scale * 0.35;
+            ctx.fillRect(baseP.x - dw / 2, baseP.y - dh, dw, dh);
+        }
     }
+}
+
+function drawBackdrop(b, p) {
+    let x1 = b.x - b.w / 2;
+    let x2 = b.x + b.w / 2;
+    let z1 = b.z - b.d / 2;
+    let z2 = b.z + b.d / 2;
+
+    let a = project(x1, 0, z1);
+    let b1 = project(x2, 0, z1);
+    let c = project(x2, 0, z2);
+    let d = project(x1, 0, z2);
+    let at = project(x1, b.h, z1);
+    let bt = project(x2, b.h, z1);
+    let ct = project(x2, b.h, z2);
+    let dt = project(x1, b.h, z2);
+    if (!a || !b1 || !c || !d || !at || !bt || !ct || !dt) return;
+
+    let fog = clamp(fogAlpha(p.depth) + 0.15, 0, 0.8);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b1.x, b1.y);
+    ctx.lineTo(bt.x, bt.y);
+    ctx.lineTo(at.x, at.y);
+    ctx.closePath();
+    ctx.fillStyle = b.color;
+    ctx.fill();
+    ctx.fillStyle = `rgba(25,30,40,${fog})`;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(at.x, at.y);
+    ctx.lineTo(bt.x, bt.y);
+    ctx.lineTo(ct.x, ct.y);
+    ctx.lineTo(dt.x, dt.y);
+    ctx.closePath();
+    ctx.fillStyle = b.roofColor;
+    ctx.fill();
+    ctx.fillStyle = `rgba(25,30,40,${fog})`;
+    ctx.fill();
 }
 
 function drawTree(t, p) {
