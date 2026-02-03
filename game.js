@@ -1,6 +1,6 @@
 // ─── CONFIG ────────────────────────────────────────────────
 const CFG = {
-    TOWER_HEIGHT: 18,
+    TOWER_HEIGHT: 28,
     VIEW_FOV: 70,
     MIN_ZOOM: 1,
     MAX_ZOOM: 6,
@@ -10,10 +10,10 @@ const CFG = {
     TOWN_RADIUS: 500,
     GROUND_Y: 0,
     BUILDING_COUNT: 18,
-    BLOCK_SIZE: 90,
-    STREET_WIDTH: 24,
-    DOWNTOWN_RADIUS: 180,
-    MIDTOWN_RADIUS: 320,
+    BLOCK_SIZE: 150,
+    STREET_WIDTH: 30,
+    DOWNTOWN_RADIUS: 110,
+    MIDTOWN_RADIUS: 220,
     BACKDROP_RADIUS: 760,
 };
 
@@ -143,6 +143,7 @@ function generateWorld() {
     createRoadGrid();
     createTownCore();
     createResidentialRing();
+    createOpenFields();
     createIndustrialLots();
     createBackdropTown();
 
@@ -198,49 +199,98 @@ function generateWorld() {
 }
 
 function createRoadGrid() {
-    const mainLen = CFG.TOWN_RADIUS * 2.2;
+    const mainLen = CFG.TOWN_RADIUS * 2.0;
     const mainWidth = CFG.STREET_WIDTH + 6;
     roads.push({ x: 0, z: 0, w: mainWidth, h: mainLen, type: 'road' });
     roads.push({ x: 0, z: 0, w: mainLen, h: mainWidth, type: 'road' });
 
     const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
-    for (let i = -3; i <= 3; i++) {
+    for (let i = -2; i <= 2; i++) {
         if (i === 0) continue;
         let offset = i * spacing;
         roads.push({ x: offset, z: 0, w: CFG.STREET_WIDTH, h: mainLen * 0.95, type: 'road' });
         roads.push({ x: 0, z: offset, w: mainLen * 0.95, h: CFG.STREET_WIDTH, type: 'road' });
     }
+
+    const ringDist = CFG.MIDTOWN_RADIUS + 110;
+    const ringLen = ringDist * 1.6;
+    roads.push({ x: 0, z: -ringDist, w: ringLen, h: CFG.STREET_WIDTH, type: 'road' });
+    roads.push({ x: 0, z: ringDist, w: ringLen, h: CFG.STREET_WIDTH, type: 'road' });
+    roads.push({ x: -ringDist, z: 0, w: CFG.STREET_WIDTH, h: ringLen, type: 'road' });
+    roads.push({ x: ringDist, z: 0, w: CFG.STREET_WIDTH, h: ringLen, type: 'road' });
 }
 
 function createTownCore() {
     const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
-    for (let gx = -3; gx <= 3; gx++) {
-        for (let gz = -3; gz <= 3; gz++) {
-            if (gx === 0 && gz === 0) continue;
-            let cx = gx * spacing;
-            let cz = gz * spacing;
-            let dist = Math.hypot(cx, cz);
-            if (dist > CFG.MIDTOWN_RADIUS) continue;
-            createTownBlock(cx, cz, dist < CFG.DOWNTOWN_RADIUS ? 'downtown' : 'midtown');
-        }
+    const plannedBlocks = [
+        { gx: -1, gz: -1 },
+        { gx: -1, gz: 1 },
+        { gx: 1, gz: -1 },
+        { gx: 1, gz: 1 },
+        { gx: 0, gz: -2 },
+        { gx: 0, gz: 2 },
+        { gx: -2, gz: 0 },
+        { gx: 2, gz: 0 },
+        { gx: -2, gz: -2 },
+        { gx: 2, gz: 2 }
+    ];
+
+    for (let spot of plannedBlocks) {
+        let cx = spot.gx * spacing;
+        let cz = spot.gz * spacing;
+        let dist = Math.hypot(cx, cz);
+        if (dist > CFG.MIDTOWN_RADIUS) continue;
+        createTownBlock(cx, cz, dist < CFG.DOWNTOWN_RADIUS ? 'downtown' : 'midtown');
     }
 }
 
 function createResidentialRing() {
-    let rings = 18;
+    let rings = 6;
     for (let i = 0; i < rings; i++) {
         let angle = (i / rings) * Math.PI * 2 + rand(-0.2, 0.2);
-        let dist = rand(CFG.MIDTOWN_RADIUS + 40, CFG.MIDTOWN_RADIUS + 120);
+        let dist = rand(CFG.MIDTOWN_RADIUS + 120, CFG.MIDTOWN_RADIUS + 220);
         let cx = Math.cos(angle) * dist;
         let cz = Math.sin(angle) * dist;
         createNeighborhoodCluster(cx, cz);
     }
 }
 
+function createOpenFields() {
+    let patches = 14;
+    for (let i = 0; i < patches; i++) {
+        let angle = rand(0, Math.PI * 2);
+        let dist = rand(CFG.MIDTOWN_RADIUS + 80, CFG.TOWN_RADIUS - 100);
+        let cx = Math.cos(angle) * dist;
+        let cz = Math.sin(angle) * dist;
+        if (isBlocked(cx, cz, 80)) continue;
+
+        let treesCount = randInt(2, 5);
+        for (let t = 0; t < treesCount; t++) {
+            trees.push({
+                x: cx + rand(-70, 70),
+                z: cz + rand(-70, 70),
+                h: rand(16, 32),
+                trunkH: rand(6, 11),
+                radius: rand(10, 16),
+                type: Math.random() > 0.5 ? 'oak' : 'pine'
+            });
+        }
+
+        let bushesCount = randInt(6, 12);
+        for (let b = 0; b < bushesCount; b++) {
+            bushes.push({
+                x: cx + rand(-80, 80),
+                z: cz + rand(-80, 80),
+                size: rand(3, 5),
+                color: pick(['#2d4c1e', '#345a28', '#27401d'])
+            });
+        }
+    }
+}
+
 function createIndustrialLots() {
     let lots = [
-        { x: 420, z: 140 }, { x: -430, z: -120 },
-        { x: 380, z: -260 }, { x: -360, z: 260 }
+        { x: 420, z: 140 }
     ];
     for (let lot of lots) {
         createIndustrialCluster(lot.x + rand(-25, 25), lot.z + rand(-25, 25));
@@ -274,8 +324,8 @@ function createBackdropTown() {
 function createTownBlock(cx, cz, zone) {
     let block = CFG.BLOCK_SIZE;
     let half = block / 2;
-    let buildingCount = zone === 'downtown' ? 6 : 4;
-    let inset = zone === 'downtown' ? 6 : 10;
+    let buildingCount = zone === 'downtown' ? 3 : 2;
+    let inset = zone === 'downtown' ? 16 : 20;
 
     for (let i = 0; i < buildingCount; i++) {
         let t = (i + 0.5) / buildingCount;
@@ -323,10 +373,10 @@ function createTownBlock(cx, cz, zone) {
 }
 
 function createNeighborhoodCluster(cx, cz) {
-    let count = randInt(4, 7);
+    let count = randInt(2, 4);
     for (let i = 0; i < count; i++) {
         let angle = rand(0, Math.PI * 2);
-        let dist = rand(8, 40);
+        let dist = rand(20, 64);
         let x = cx + Math.cos(angle) * dist;
         let z = cz + Math.sin(angle) * dist;
         createBuilding(x, z, rand(24, 36), rand(24, 36), 'residential');
