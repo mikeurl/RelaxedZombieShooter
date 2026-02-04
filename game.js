@@ -142,38 +142,52 @@ function generateWorld() {
     // ─── STRUCTURED TOWN LAYOUT ───────────────────────────
     createRoadGrid();
     createTownCore();
+    addStreetTrees();
     createResidentialRing();
     createOpenFields();
     createIndustrialLots();
     createBackdropTown();
 
     // ─── Farm Outskirts (Outer Lots) ─────────────────────
-    // Large lots: 200x200
-    // Quadrants, skipping the town center area
+    // Farms positioned well outside town, accessed by rural roads
+    // Each farm has unique character and positioning
     let farmLots = [
-        { x: 250, z: 250 }, { x: -250, z: 250 },
-        { x: -250, z: -250 }, { x: 250, z: -250 },
-        { x: 250, z: 0 }, { x: -250, z: 0 }, // East/West extremes
-        { x: 0, z: 250 }, { x: 0, z: -250 }  // North/South extremes
+        // Northeast farm - large property
+        { x: 320, z: -280, size: 'large' },
+        // Southeast farm
+        { x: 340, z: 200, size: 'medium' },
+        // Northwest farm
+        { x: -300, z: -260, size: 'large' },
+        // Southwest farm
+        { x: -320, z: 240, size: 'medium' },
+        // Far east farm along the rural road
+        { x: 380, z: 60, size: 'small' },
     ];
 
     for (let lot of farmLots) {
-        // Skip if too close to center
-        // (Handled by manual list above typically, but let's randomize slightly)
-        let cx = lot.x + rand(-20, 20);
-        let cz = lot.z + rand(-20, 20);
-
-        createFarmLot(cx, cz);
+        let cx = lot.x + rand(-15, 15);
+        let cz = lot.z + rand(-15, 15);
+        createFarmLot(cx, cz, lot.size || 'medium');
     }
 
-    // 4. Forests (Fill empty space far out)
-    for (let i = 0; i < 15; i++) {
-        let angle = rand(0, Math.PI * 2);
-        let dist = rand(350, 550);
-        let tx = Math.cos(angle) * dist;
-        let tz = Math.sin(angle) * dist;
+    // Forests - create natural wooded areas at the edges
+    // Position them deliberately to frame the scene
+    let forestLocations = [
+        { x: -400, z: -150, size: 'large' },
+        { x: -380, z: 150, size: 'medium' },
+        { x: 420, z: -180, size: 'medium' },
+        { x: 400, z: 280, size: 'large' },
+        { x: -200, z: -380, size: 'medium' },
+        { x: 180, z: -400, size: 'small' },
+        { x: -150, z: 400, size: 'medium' },
+        { x: 200, z: 380, size: 'small' },
+    ];
+
+    for (let loc of forestLocations) {
+        let tx = loc.x + rand(-40, 40);
+        let tz = loc.z + rand(-40, 40);
         if (!isBlocked(tx, tz, 50)) {
-            createForestPatch(tx, tz);
+            createForestPatch(tx, tz, loc.size);
         }
     }
 
@@ -199,102 +213,199 @@ function generateWorld() {
 }
 
 function createRoadGrid() {
-    const mainLen = CFG.TOWN_RADIUS * 2.0;
-    const mainWidth = CFG.STREET_WIDTH + 6;
-    roads.push({ x: 0, z: 0, w: mainWidth, h: mainLen, type: 'road' });
-    roads.push({ x: 0, z: 0, w: mainLen, h: mainWidth, type: 'road' });
+    // Main Street - runs north-south through town center
+    const mainStreetLen = 450;
+    const mainWidth = CFG.STREET_WIDTH + 8;
+    roads.push({ x: 0, z: 0, w: mainWidth, h: mainStreetLen, type: 'road' });
 
-    const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
-    for (let i = -2; i <= 2; i++) {
-        if (i === 0) continue;
-        let offset = i * spacing;
-        roads.push({ x: offset, z: 0, w: CFG.STREET_WIDTH, h: mainLen * 0.95, type: 'road' });
-        roads.push({ x: 0, z: offset, w: mainLen * 0.95, h: CFG.STREET_WIDTH, type: 'road' });
-    }
+    // Central cross street (like "1st Ave" crossing Main)
+    roads.push({ x: 0, z: 0, w: 320, h: CFG.STREET_WIDTH, type: 'road' });
 
-    const ringDist = CFG.MIDTOWN_RADIUS + 110;
-    const ringLen = ringDist * 1.6;
-    roads.push({ x: 0, z: -ringDist, w: ringLen, h: CFG.STREET_WIDTH, type: 'road' });
-    roads.push({ x: 0, z: ringDist, w: ringLen, h: CFG.STREET_WIDTH, type: 'road' });
-    roads.push({ x: -ringDist, z: 0, w: CFG.STREET_WIDTH, h: ringLen, type: 'road' });
-    roads.push({ x: ringDist, z: 0, w: CFG.STREET_WIDTH, h: ringLen, type: 'road' });
+    // Secondary cross streets - shorter, don't extend forever
+    roads.push({ x: 0, z: -120, w: 240, h: CFG.STREET_WIDTH - 4, type: 'road' });
+    roads.push({ x: 0, z: 120, w: 260, h: CFG.STREET_WIDTH - 4, type: 'road' });
+
+    // Back street parallel to Main (like a small "2nd Street")
+    roads.push({ x: -100, z: 0, w: CFG.STREET_WIDTH - 6, h: 280, type: 'road' });
+    roads.push({ x: 100, z: 0, w: CFG.STREET_WIDTH - 6, h: 300, type: 'road' });
+
+    // A couple rural roads extending outward (gravel roads to farms)
+    roads.push({ x: 180, z: 60, w: 200, h: CFG.STREET_WIDTH - 8, type: 'road' });
+    roads.push({ x: -160, z: -80, w: 180, h: CFG.STREET_WIDTH - 8, type: 'road' });
 }
 
 function createTownCore() {
-    const spacing = CFG.BLOCK_SIZE + CFG.STREET_WIDTH;
-    const plannedBlocks = [
-        { gx: -1, gz: -1 },
-        { gx: -1, gz: 1 },
-        { gx: 1, gz: -1 },
-        { gx: 1, gz: 1 },
-        { gx: 0, gz: -2 },
-        { gx: 0, gz: 2 },
-        { gx: -2, gz: 0 },
-        { gx: 2, gz: 0 },
-        { gx: -2, gz: -2 },
-        { gx: 2, gz: 2 }
+    // Buildings lining Main Street (east side - facing west toward Main St)
+    let mainStreetBuildings = [
+        { x: 35, z: -140, zone: 'downtown' },
+        { x: 38, z: -80, zone: 'downtown' },
+        { x: 36, z: -20, zone: 'downtown' },
+        { x: 34, z: 40, zone: 'downtown' },
+        { x: 37, z: 100, zone: 'midtown' },
     ];
 
-    for (let spot of plannedBlocks) {
-        let cx = spot.gx * spacing;
-        let cz = spot.gz * spacing;
-        let dist = Math.hypot(cx, cz);
-        if (dist > CFG.MIDTOWN_RADIUS) continue;
-        createTownBlock(cx, cz, dist < CFG.DOWNTOWN_RADIUS ? 'downtown' : 'midtown');
+    // Buildings lining Main Street (west side - facing east toward Main St)
+    let westSideBuildings = [
+        { x: -35, z: -120, zone: 'downtown' },
+        { x: -38, z: -50, zone: 'downtown' },
+        { x: -36, z: 20, zone: 'downtown' },
+        { x: -34, z: 80, zone: 'midtown' },
+        { x: -37, z: 140, zone: 'midtown' },
+    ];
+
+    // Create main street buildings with proper dimensions
+    for (let spot of mainStreetBuildings) {
+        let w = rand(28, 45);
+        let d = rand(35, 55);
+        createBuilding(spot.x + w/2, spot.z, w, d, spot.zone);
     }
+
+    for (let spot of westSideBuildings) {
+        let w = rand(28, 45);
+        let d = rand(35, 55);
+        createBuilding(spot.x - w/2, spot.z, w, d, spot.zone);
+    }
+
+    // Buildings along central cross street
+    let crossStreetBuildings = [
+        { x: 80, z: -30, zone: 'midtown' },
+        { x: 130, z: -32, zone: 'midtown' },
+        { x: -80, z: 28, zone: 'midtown' },
+        { x: -130, z: 30, zone: 'residential' },
+    ];
+
+    for (let spot of crossStreetBuildings) {
+        let w = rand(30, 50);
+        let d = rand(30, 45);
+        createBuilding(spot.x, spot.z + (spot.z > 0 ? d/2 + 8 : -d/2 - 8), w, d, spot.zone);
+    }
+
+    // Corner buildings at main intersection
+    createBuilding(45, 45, rand(35, 50), rand(35, 45), 'downtown');
+    createBuilding(-48, -48, rand(35, 50), rand(35, 45), 'downtown');
 }
 
 function createResidentialRing() {
-    let rings = 6;
-    for (let i = 0; i < rings; i++) {
-        let angle = (i / rings) * Math.PI * 2 + rand(-0.2, 0.2);
-        let dist = rand(CFG.MIDTOWN_RADIUS + 120, CFG.MIDTOWN_RADIUS + 220);
-        let cx = Math.cos(angle) * dist;
-        let cz = Math.sin(angle) * dist;
-        createNeighborhoodCluster(cx, cz);
+    // Residential neighborhoods positioned along secondary streets
+    // Not randomly scattered - they form coherent neighborhoods
+
+    // North neighborhood - along the northern cross street
+    createNeighborhoodRow(-90, -150, 4, 'horizontal');
+    createNeighborhoodRow(70, -160, 3, 'horizontal');
+
+    // South neighborhood - along southern areas
+    createNeighborhoodRow(-80, 160, 3, 'horizontal');
+    createNeighborhoodRow(60, 170, 4, 'horizontal');
+
+    // East side residential - along the back street
+    createNeighborhoodRow(140, -60, 3, 'vertical');
+    createNeighborhoodRow(150, 80, 2, 'vertical');
+
+    // West side residential
+    createNeighborhoodRow(-140, 40, 3, 'vertical');
+}
+
+function createNeighborhoodRow(startX, startZ, count, direction) {
+    let spacing = rand(50, 65);
+    for (let i = 0; i < count; i++) {
+        let x = direction === 'horizontal' ? startX + i * spacing : startX + rand(-8, 8);
+        let z = direction === 'vertical' ? startZ + i * spacing : startZ + rand(-8, 8);
+
+        // House with yard setback
+        let w = rand(24, 36);
+        let d = rand(28, 40);
+        createBuilding(x, z, w, d, 'residential');
+
+        // Yard tree
+        if (Math.random() > 0.4) {
+            let treeOffset = direction === 'horizontal' ? rand(-20, 20) : rand(15, 25);
+            trees.push({
+                x: x + (direction === 'horizontal' ? treeOffset : rand(-5, 5)),
+                z: z + (direction === 'vertical' ? treeOffset : rand(15, 25)),
+                h: rand(18, 28),
+                trunkH: rand(5, 9),
+                radius: rand(8, 14),
+                type: 'oak'
+            });
+        }
     }
 }
 
 function createOpenFields() {
-    let patches = 14;
-    for (let i = 0; i < patches; i++) {
-        let angle = rand(0, Math.PI * 2);
-        let dist = rand(CFG.MIDTOWN_RADIUS + 80, CFG.TOWN_RADIUS - 100);
-        let cx = Math.cos(angle) * dist;
-        let cz = Math.sin(angle) * dist;
-        if (isBlocked(cx, cz, 80)) continue;
+    // Create natural field areas between town and farms
+    // These fill the spaces and create visual separation
 
-        let treesCount = randInt(2, 5);
+    // Meadow areas with scattered vegetation
+    let meadowLocations = [
+        { x: 200, z: -100 },   // East of town
+        { x: -200, z: 100 },   // West of town
+        { x: 150, z: 250 },    // Southeast
+        { x: -180, z: -200 },  // Northwest
+        { x: 0, z: -280 },     // North
+        { x: 0, z: 280 },      // South
+    ];
+
+    for (let meadow of meadowLocations) {
+        let cx = meadow.x + rand(-30, 30);
+        let cz = meadow.z + rand(-30, 30);
+
+        if (isBlocked(cx, cz, 60)) continue;
+
+        // Scattered trees - small copses
+        let treesCount = randInt(2, 4);
         for (let t = 0; t < treesCount; t++) {
-            trees.push({
-                x: cx + rand(-70, 70),
-                z: cz + rand(-70, 70),
-                h: rand(16, 32),
-                trunkH: rand(6, 11),
-                radius: rand(10, 16),
-                type: Math.random() > 0.5 ? 'oak' : 'pine'
-            });
+            let tx = cx + rand(-45, 45);
+            let tz = cz + rand(-45, 45);
+            if (!isBlocked(tx, tz, 15)) {
+                trees.push({
+                    x: tx, z: tz,
+                    h: rand(18, 30),
+                    trunkH: rand(6, 10),
+                    radius: rand(9, 14),
+                    type: Math.random() > 0.6 ? 'pine' : 'oak'
+                });
+            }
         }
 
-        let bushesCount = randInt(6, 12);
+        // Wild bushes/shrubs
+        let bushesCount = randInt(5, 9);
         for (let b = 0; b < bushesCount; b++) {
             bushes.push({
-                x: cx + rand(-80, 80),
-                z: cz + rand(-80, 80),
-                size: rand(3, 5),
-                color: pick(['#2d4c1e', '#345a28', '#27401d'])
+                x: cx + rand(-55, 55),
+                z: cz + rand(-55, 55),
+                size: rand(2.5, 4.5),
+                color: pick(['#2d4c1e', '#345a28', '#27401d', '#3a5530'])
+            });
+        }
+    }
+
+    // Tree lines along property boundaries (natural windbreaks)
+    createTreeLine(-220, -100, -220, 100, 8);  // West treeline
+    createTreeLine(220, -80, 220, 120, 7);     // East treeline
+}
+
+function createTreeLine(x1, z1, x2, z2, count) {
+    for (let i = 0; i < count; i++) {
+        let t = (i + 0.5) / count;
+        let x = x1 + (x2 - x1) * t + rand(-8, 8);
+        let z = z1 + (z2 - z1) * t + rand(-8, 8);
+
+        if (!isBlocked(x, z, 12)) {
+            trees.push({
+                x: x, z: z,
+                h: rand(24, 38),
+                trunkH: rand(7, 12),
+                radius: rand(10, 16),
+                type: Math.random() > 0.3 ? 'oak' : 'pine'
             });
         }
     }
 }
 
 function createIndustrialLots() {
-    let lots = [
-        { x: 420, z: 140 }
-    ];
-    for (let lot of lots) {
-        createIndustrialCluster(lot.x + rand(-25, 25), lot.z + rand(-25, 25));
-    }
+    // Industrial area on the edge of town, along a rural road
+    // Positioned to not conflict with residential areas
+    createIndustrialCluster(260, -40);
 }
 
 function createBackdropTown() {
@@ -321,84 +432,46 @@ function createBackdropTown() {
     }
 }
 
-function createTownBlock(cx, cz, zone) {
-    let block = CFG.BLOCK_SIZE;
-    let half = block / 2;
-    let buildingCount = zone === 'downtown' ? 3 : 2;
-    let inset = zone === 'downtown' ? 16 : 20;
+// Street trees along main road for town character
+function addStreetTrees() {
+    // Trees lining Main Street
+    let mainStreetTrees = [
+        { x: 25, z: -170 }, { x: -25, z: -150 },
+        { x: 26, z: -60 },  { x: -26, z: -30 },
+        { x: 25, z: 60 },   { x: -25, z: 90 },
+        { x: 26, z: 160 },  { x: -26, z: 180 },
+    ];
 
-    for (let i = 0; i < buildingCount; i++) {
-        let t = (i + 0.5) / buildingCount;
-        let w = zone === 'downtown' ? rand(18, 32) : rand(20, 38);
-        let d = zone === 'downtown' ? rand(18, 28) : rand(24, 36);
-        let x = cx - half + inset + t * (block - inset * 2);
-        let z = cz - half + inset;
-        createBuilding(x, z, w, d, zone);
-    }
-    for (let i = 0; i < buildingCount; i++) {
-        let t = (i + 0.5) / buildingCount;
-        let w = zone === 'downtown' ? rand(18, 32) : rand(20, 38);
-        let d = zone === 'downtown' ? rand(18, 28) : rand(24, 36);
-        let x = cx - half + inset + t * (block - inset * 2);
-        let z = cz + half - inset;
-        createBuilding(x, z, w, d, zone);
-    }
-    for (let i = 0; i < buildingCount - 1; i++) {
-        let t = (i + 0.6) / (buildingCount - 0.2);
-        let w = zone === 'downtown' ? rand(18, 28) : rand(22, 34);
-        let d = zone === 'downtown' ? rand(18, 30) : rand(24, 36);
-        let x = cx - half + inset;
-        let z = cz - half + inset + t * (block - inset * 2);
-        createBuilding(x, z, w, d, zone);
-    }
-    for (let i = 0; i < buildingCount - 1; i++) {
-        let t = (i + 0.6) / (buildingCount - 0.2);
-        let w = zone === 'downtown' ? rand(18, 28) : rand(22, 34);
-        let d = zone === 'downtown' ? rand(18, 30) : rand(24, 36);
-        let x = cx + half - inset;
-        let z = cz - half + inset + t * (block - inset * 2);
-        createBuilding(x, z, w, d, zone);
-    }
-
-    if (zone === 'midtown' && Math.random() > 0.4) {
+    for (let spot of mainStreetTrees) {
         trees.push({
-            x: cx + rand(-10, 10),
-            z: cz + rand(-10, 10),
-            h: rand(18, 30),
-            trunkH: rand(6, 10),
-            radius: rand(10, 16),
+            x: spot.x + rand(-3, 3),
+            z: spot.z + rand(-5, 5),
+            h: rand(16, 24),
+            trunkH: rand(5, 8),
+            radius: rand(7, 11),
             type: 'oak'
         });
     }
 }
 
-function createNeighborhoodCluster(cx, cz) {
-    let count = randInt(2, 4);
-    for (let i = 0; i < count; i++) {
-        let angle = rand(0, Math.PI * 2);
-        let dist = rand(20, 64);
-        let x = cx + Math.cos(angle) * dist;
-        let z = cz + Math.sin(angle) * dist;
-        createBuilding(x, z, rand(24, 36), rand(24, 36), 'residential');
-        if (Math.random() > 0.5) {
-            trees.push({
-                x: x + rand(-6, 6),
-                z: z + rand(-6, 6),
-                h: rand(20, 36),
-                trunkH: rand(6, 12),
-                radius: rand(10, 18),
-                type: Math.random() > 0.5 ? 'oak' : 'pine'
-            });
-        }
-    }
-}
-
 function createIndustrialCluster(cx, cz) {
-    let count = randInt(2, 4);
-    for (let i = 0; i < count; i++) {
-        let x = cx + rand(-35, 35);
-        let z = cz + rand(-35, 35);
-        createBuilding(x, z, rand(50, 80), rand(35, 55), 'industrial');
+    // Main warehouse
+    createBuilding(cx, cz, rand(60, 80), rand(45, 60), 'industrial');
+
+    // Secondary building
+    createBuilding(cx + rand(70, 90), cz + rand(-20, 20), rand(45, 60), rand(35, 50), 'industrial');
+
+    // Small storage or office
+    createBuilding(cx + rand(30, 50), cz + rand(50, 70), rand(30, 40), rand(25, 35), 'industrial');
+
+    // A few industrial bushes/shrubs around
+    for (let i = 0; i < 4; i++) {
+        bushes.push({
+            x: cx + rand(-30, 100),
+            z: cz + rand(-40, 80),
+            size: rand(2, 4),
+            color: '#2a4018'
+        });
     }
 }
 
@@ -443,101 +516,150 @@ function createBuilding(x, z, w, d, zone) {
     });
 }
 
-function createFarmLot(cx, cz) {
-    let w = 150;
-    let h = 150;
+function createFarmLot(cx, cz, size) {
+    // Variable farm sizes for natural look
+    let w, h;
+    if (size === 'large') {
+        w = rand(160, 200);
+        h = rand(150, 190);
+    } else if (size === 'small') {
+        w = rand(100, 130);
+        h = rand(90, 120);
+    } else {
+        w = rand(130, 160);
+        h = rand(120, 150);
+    }
 
-    // Fence Perimeter (Rectangular)
-    // Top
-    createStraightFence(cx - w / 2, cz - h / 2, cx + w / 2, cz - h / 2);
-    // Bottom
-    createStraightFence(cx - w / 2, cz + h / 2, cx + w / 2, cz + h / 2);
-    // Left
-    createStraightFence(cx - w / 2, cz - h / 2, cx - w / 2, cz + h / 2);
-    // Right
-    createStraightFence(cx + w / 2, cz - h / 2, cx + w / 2, cz + h / 2);
+    // Only fence the pasture/animal areas, not the whole property
+    // Front fence along road-facing side (partial)
+    let fenceStartX = cx - w / 3;
+    let fenceEndX = cx + w / 2.5;
+    createStraightFence(fenceStartX, cz + h / 3, fenceEndX, cz + h / 3);
 
-    // Farmhouse
-    let fh = {
-        x: cx - 40, z: cz - 40,
-        w: 40, d: 40, h: 20,
+    // Side fences for pasture area
+    createStraightFence(fenceStartX, cz + h / 3, fenceStartX, cz + h / 2 - 10);
+    createStraightFence(fenceEndX, cz + h / 3, fenceEndX, cz + h / 2 - 10);
+
+    // Farmhouse - positioned near "road" side
+    let houseW = size === 'large' ? rand(38, 48) : rand(30, 40);
+    let houseD = size === 'large' ? rand(35, 45) : rand(28, 38);
+    buildings.push({
+        x: cx - w / 4, z: cz - h / 4,
+        w: houseW, d: houseD, h: rand(18, 24),
         type: 'house',
-        color: '#eef', roofColor: '#556'
-    };
-    buildings.push(fh);
-
-    // Barn
-    buildings.push({
-        x: cx + 30, z: cz - 30,
-        w: 60, d: 40, h: 35,
-        type: 'barn',
-        color: `hsl(${randInt(0, 20)}, ${randInt(40, 60)}%, ${randInt(30, 45)}%)`,
-        roofColor: '#3a3a3a'
+        color: pick(['#e8e4dc', '#dcd5c8', '#f0ebe3', '#d8d0c0']),
+        roofColor: pick(['#4a4540', '#554f48', '#3d3835'])
     });
 
-    // Silo
-    buildings.push({
-        x: cx + 70, z: cz - 30,
-        w: 20, d: 20, h: 50,
-        type: 'silo',
-        color: `hsl(${randInt(180, 220)}, ${randInt(5, 15)}%, ${randInt(60, 75)}%)`,
-        roofColor: `hsl(${randInt(180, 220)}, ${randInt(5, 15)}%, ${randInt(50, 65)}%)`
-    });
+    // Barn - set back from house
+    if (size !== 'small') {
+        let barnW = size === 'large' ? rand(55, 70) : rand(45, 58);
+        let barnD = size === 'large' ? rand(38, 50) : rand(32, 42);
+        buildings.push({
+            x: cx + w / 5, z: cz - h / 5,
+            w: barnW, d: barnD, h: rand(30, 42),
+            type: 'barn',
+            color: `hsl(${randInt(0, 15)}, ${randInt(45, 65)}%, ${randInt(28, 40)}%)`,
+            roofColor: '#3a3835'
+        });
 
-    // Crops/Bushes in rows
-    for (let bx = cx - 50; bx < cx + 50; bx += 20) {
-        for (let bz = cz + 20; bz < cz + 60; bz += 20) {
+        // Silo next to barn
+        buildings.push({
+            x: cx + w / 5 + barnW / 2 + 15, z: cz - h / 5,
+            w: 18, d: 18, h: rand(45, 60),
+            type: 'silo',
+            color: `hsl(${randInt(200, 220)}, ${randInt(6, 12)}%, ${randInt(62, 75)}%)`,
+            roofColor: `hsl(${randInt(200, 220)}, ${randInt(6, 12)}%, ${randInt(52, 62)}%)`
+        });
+    }
+
+    // Crop field - organized rows
+    let cropStartX = cx - w / 3;
+    let cropEndX = cx + w / 4;
+    let rowSpacing = 12;
+    for (let bx = cropStartX; bx < cropEndX; bx += rowSpacing) {
+        for (let bz = cz + 5; bz < cz + h / 3 - 10; bz += 18) {
             bushes.push({
-                x: bx + rand(-2, 2), z: bz + rand(-2, 2),
-                size: rand(3, 5),
-                color: '#2d4c1e'
+                x: bx + rand(-1.5, 1.5), z: bz + rand(-2, 2),
+                size: rand(2.5, 4),
+                color: pick(['#2d4c1e', '#3a5a28', '#2a4420'])
             });
         }
+    }
+
+    // A few trees around farmhouse
+    trees.push({
+        x: cx - w / 4 - houseW / 2 - 15, z: cz - h / 4,
+        h: rand(22, 32), trunkH: rand(6, 10), radius: rand(10, 15),
+        type: 'oak'
+    });
+    if (Math.random() > 0.4) {
+        trees.push({
+            x: cx - w / 4 + rand(-10, 10), z: cz - h / 4 - houseD / 2 - 20,
+            h: rand(18, 26), trunkH: rand(5, 8), radius: rand(8, 12),
+            type: 'oak'
+        });
     }
 }
 
 function createStraightFence(x1, z1, x2, z2) {
     let len = Math.hypot(x2 - x1, z2 - z1);
-    let count = Math.ceil(len / 12); // fence posts every 12 units
+    let postSpacing = rand(10, 14); // Slight variation in post spacing
+    let count = Math.ceil(len / postSpacing);
     let angle = Math.atan2(z2 - z1, x2 - x1);
 
     for (let i = 0; i <= count; i++) {
         let t = i / count;
-        // Leave a gap sometimes? usually farms are enclosed
-        // Let's leave a gate if it's near the center of a wall?
-        if (t > 0.45 && t < 0.55 && len > 50) continue;
+        // Add slight organic wobble to fence posts
+        let wobbleX = rand(-0.8, 0.8);
+        let wobbleZ = rand(-0.8, 0.8);
 
         fences.push({
-            x: x1 + (x2 - x1) * t,
-            z: z1 + (z2 - z1) * t,
+            x: x1 + (x2 - x1) * t + wobbleX,
+            z: z1 + (z2 - z1) * t + wobbleZ,
             y: 0,
-            angle: angle + Math.PI / 2 // Perpendicular to line? Or does angle matter for Post? 
-            // Original fence drawing used angle to rotate the rail.
-            // If we just draw posts, angle matters for rails.
-            // Let's align it to the fence line.
-            // Wait, existing drawFence uses 'angle' to rotate context. 
-            // If fence is running E-W (angle 0), we want rails E-W.
+            angle: angle,
+            // Slight height variation for weathered look
+            heightMod: rand(0.85, 1.0)
         });
-        // We probably need to adjust the fence drawing code if it expects 'angle' to be facing 'center'.
-        // But let's assume 'angle' is the rotation of the object.
-        // If fence runs from (0,0) to (100,0), rot should be 0.
-        // My atan2 gives direction of line.
-        // I'll check drawFence later.
-        fences[fences.length - 1].angle = angle; // Explicitly set it
     }
 }
 
-function createForestPatch(cx, cz) {
-    let count = randInt(5, 12);
+function createForestPatch(cx, cz, size) {
+    let count, spread;
+    if (size === 'large') {
+        count = randInt(10, 16);
+        spread = 60;
+    } else if (size === 'small') {
+        count = randInt(4, 7);
+        spread = 30;
+    } else {
+        count = randInt(6, 10);
+        spread = 45;
+    }
+
     for (let i = 0; i < count; i++) {
-        let type = Math.random() < 0.4 ? 'pine' : 'oak';
+        let type = Math.random() < 0.5 ? 'pine' : 'oak';
+        let tx = cx + rand(-spread, spread);
+        let tz = cz + rand(-spread, spread);
+
         trees.push({
-            x: cx + rand(-40, 40),
-            z: cz + rand(-40, 40),
-            h: type === 'pine' ? rand(30, 60) : rand(20, 40),
-            trunkH: type === 'pine' ? rand(4, 10) : rand(8, 15),
-            radius: type === 'pine' ? rand(8, 15) : rand(12, 20),
+            x: tx, z: tz,
+            h: type === 'pine' ? rand(32, 55) : rand(22, 38),
+            trunkH: type === 'pine' ? rand(5, 12) : rand(8, 14),
+            radius: type === 'pine' ? rand(9, 14) : rand(11, 18),
             type
+        });
+    }
+
+    // Add underbrush
+    let bushCount = Math.floor(count * 0.6);
+    for (let i = 0; i < bushCount; i++) {
+        bushes.push({
+            x: cx + rand(-spread * 0.8, spread * 0.8),
+            z: cz + rand(-spread * 0.8, spread * 0.8),
+            size: rand(2, 4),
+            color: pick(['#1e3a16', '#2a4520', '#1c3212'])
         });
     }
 }
@@ -1353,12 +1475,20 @@ function drawBush(b, p) {
 
 function drawFence(f, p) {
     let s = p.scale;
-    let h = 8 * s;
-    let w = 2 * s;
-    ctx.fillStyle = '#5c4033';
+    let heightMod = f.heightMod || 1.0;
+    let h = 8 * s * heightMod;
+    let w = 2.5 * s;
+
+    // Post - weathered wood color
+    ctx.fillStyle = '#5c4a38';
     ctx.fillRect(p.x - w / 2, p.y - h, w, h);
-    // Rail
-    ctx.fillRect(p.x - 10 * s, p.y - h * 0.8, 20 * s, 2 * s);
+
+    // Top rail
+    ctx.fillStyle = '#4a3d2e';
+    ctx.fillRect(p.x - 11 * s, p.y - h * 0.85, 22 * s, 2.2 * s);
+
+    // Bottom rail
+    ctx.fillRect(p.x - 11 * s, p.y - h * 0.4, 22 * s, 2 * s);
 }
 
 function drawZombie(z, p) {
