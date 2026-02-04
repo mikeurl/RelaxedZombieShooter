@@ -1832,7 +1832,7 @@ document.addEventListener('mousemove', (e) => {
     // Push mouse right → aim right, push mouse down → aim down
     yaw -= e.movementX * sensitivity;
     pitch -= e.movementY * sensitivity;
-    pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.05);
+    pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.01);
 });
 
 document.addEventListener('wheel', (e) => {
