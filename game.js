@@ -705,7 +705,7 @@ function updateRemainingUI() {
 
 function spawnZombie() {
     let angle = rand(0, Math.PI * 2);
-    let dist = rand(40, CFG.TOWN_RADIUS * 0.9);
+    let dist = rand(80, CFG.TOWN_RADIUS * 0.9);
     let z = {
         x: Math.cos(angle) * dist,
         z: Math.sin(angle) * dist,
@@ -779,11 +779,16 @@ function update(dt) {
         z.z += Math.sin(z.angle) * z.speed * dt;
         z.limbPhase += dt * z.speed * 1.5;
 
-        // Keep in bounds
+        // Keep in bounds - not too far, not too close to tower
         let dist = Math.sqrt(z.x * z.x + z.z * z.z);
         if (dist > CFG.TOWN_RADIUS) {
             z.wanderDir = Math.atan2(-z.z, -z.x) + rand(-0.5, 0.5);
             z.wanderTimer = rand(2, 5);
+        }
+        // Don't get too close to tower - turn around
+        if (dist < 50) {
+            z.wanderDir = Math.atan2(z.z, z.x) + rand(-0.3, 0.3);
+            z.wanderTimer = rand(1, 3);
         }
     }
 
