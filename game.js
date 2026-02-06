@@ -3,7 +3,7 @@ const CFG = {
     TOWER_HEIGHT: 28,
     VIEW_FOV: 70,
     MIN_ZOOM: 1,
-    MAX_ZOOM: 6,
+    MAX_ZOOM: 10,
     ZOMBIE_COUNT: 30,
     ZOMBIE_SPEED_MIN: 0.4,
     ZOMBIE_SPEED_MAX: 1.2,
@@ -34,37 +34,43 @@ let recoilT = 0;
 let round = 1;
 let themeIndex = 0;
 let musicOn = false;
-let musicOsc = null;
-let musicGain = null;
+let musicSynth = null;
+let musicTimer = null;
+let musicStep = 0;
+const MUSIC_BPM = 124;
+const MUSIC_STEPS_PER_BEAT = 4;
+const MUSIC_LEAD_PATTERN = [
+    57, 60, 64, 60,
+    57, 60, 62, 60,
+    55, 59, 62, 59,
+    55, 59, 60, 59
+];
+const MUSIC_BASS_PATTERN = [
+    45, 45, 45, 45,
+    43, 43, 43, 43,
+    41, 41, 41, 41,
+    43, 43, 43, 43
+];
 let zombieSprite = null;
+let zombieSpriteHitMask = null;
+const ZOMBIE_MASK_ALPHA_THRESHOLD = 10;
+const ZOMBIE_HIT_ALPHA_THRESHOLD = 1;
+const ZOMBIE_HEAD_MASK_CUTOFF = 0.44;
+const ZOMBIE_HEAD_COLUMN_RATIO = 0.5;
+const ZOMBIE_HEADSHOT_EXPAND_X = 3;
+const ZOMBIE_HEADSHOT_EXPAND_UP = 5;
+const ZOMBIE_HEADSHOT_EXPAND_DOWN = 2;
 const ZOMBIE_SPRITE = null; // Removed old ASCII data
 const ZOMBIE_PALETTE = null; // Removed old palette
 let roundStartTime = 0;
-
-window.addEventListener('keydown', (e) => {
-    if (e.key === 'm' || e.key === 'M') {
-        musicOn = !musicOn;
-        updateMusicUI();
-    }
-});
-
-function updateMusicUI() {
-    let el = document.getElementById('music-status');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'music-status';
-        el.style.position = 'absolute';
-        el.style.top = '60px';
-        el.style.left = '20px';
-        el.style.color = '#fff';
-        el.style.fontFamily = 'monospace';
-        el.style.zIndex = 100;
-        document.body.appendChild(el);
-    }
-    el.textContent = 'MUSIC: ' + (musicOn ? 'ON' : 'OFF');
-    el.style.opacity = '1';
-    // optionally fade out after a while? keeping it simple for now
-}
+let streakPopups = [];
+const STREAK_MILESTONES = [
+    { count: 2, label: 'DOUBLE KILL', color: '#ffe6a3', tone: 600 },
+    { count: 3, label: 'TRIPLE KILL', color: '#ffd37f', tone: 660 },
+    { count: 5, label: 'RAMPAGE', color: '#ffbe72', tone: 730 },
+    { count: 8, label: 'BERSERK', color: '#ff9c78', tone: 820 },
+    { count: 12, label: 'UNSTOPPABLE', color: '#ff7aa0', tone: 920 }
+];
 
 const THEMES = [
     {
@@ -121,10 +127,144 @@ function buildZombieSprite() {
     const img = new Image();
     img.src = 'zombie.png';
     img.onload = () => {
-        // Image is now pre-processed (transparent PNG)
-        // No runtime manipulation needed, preventing CORS/SecurityError on local files.
         zombieSprite = img;
+        zombieSpriteHitMask = buildZombieHeadMask(img);
     };
+}
+
+function buildZombieHeadMask(img) {
+    try {
+        const w = img.width;
+        const h = img.height;
+        const cutoffY = Math.max(1, Math.floor(h * ZOMBIE_HEAD_MASK_CUTOFF));
+        const canvasMask = document.createElement('canvas');
+        canvasMask.width = w;
+        canvasMask.height = h;
+        const cctx = canvasMask.getContext('2d', { willReadFrequently: true });
+        cctx.drawImage(img, 0, 0, w, h);
+        const rgba = cctx.getImageData(0, 0, w, h).data;
+
+        const alpha = new Uint8Array(w * h);
+        for (let i = 0, j = 3; i < alpha.length; i++, j += 4) {
+            alpha[i] = rgba[j];
+        }
+
+        const columnTop = new Int16Array(w);
+        const columnBottom = new Int16Array(w);
+        const columnHeadLimit = new Int16Array(w);
+        for (let x = 0; x < w; x++) {
+            let top = h;
+            let bottom = -1;
+            for (let y = 0; y < h; y++) {
+                const idx = y * w + x;
+                if (alpha[idx] < ZOMBIE_MASK_ALPHA_THRESHOLD) continue;
+                if (y < top) top = y;
+                bottom = y;
+            }
+            columnTop[x] = top < h ? top : -1;
+            columnBottom[x] = bottom;
+            if (top < h && bottom >= top) {
+                let limit = top + Math.floor((bottom - top + 1) * ZOMBIE_HEAD_COLUMN_RATIO);
+                limit = Math.min(limit, Math.floor(h * (ZOMBIE_HEAD_MASK_CUTOFF + 0.1)));
+                columnHeadLimit[x] = limit;
+            } else {
+                columnHeadLimit[x] = -1;
+            }
+        }
+
+        const headMask = new Uint8Array(w * h);
+        const targetX = (w - 1) * 0.5;
+        const targetY = h * 0.2;
+        let seed = -1;
+        let bestDist = Infinity;
+
+        for (let y = 0; y < cutoffY; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = y * w + x;
+                if (alpha[idx] < ZOMBIE_MASK_ALPHA_THRESHOLD) continue;
+                const dx = x - targetX;
+                const dy = y - targetY;
+                const d = dx * dx + dy * dy * 1.6;
+                if (d < bestDist) {
+                    bestDist = d;
+                    seed = idx;
+                }
+            }
+        }
+
+        if (seed >= 0) {
+            const queue = [seed];
+            headMask[seed] = 1;
+            for (let q = 0; q < queue.length; q++) {
+                const idx = queue[q];
+                const x = idx % w;
+                const y = Math.floor(idx / w);
+                for (let oy = -1; oy <= 1; oy++) {
+                    for (let ox = -1; ox <= 1; ox++) {
+                        if (ox === 0 && oy === 0) continue;
+                        const nx = x + ox;
+                        const ny = y + oy;
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= cutoffY) continue;
+                        const nIdx = ny * w + nx;
+                        if (headMask[nIdx]) continue;
+                        if (alpha[nIdx] < ZOMBIE_MASK_ALPHA_THRESHOLD) continue;
+                        headMask[nIdx] = 1;
+                        queue.push(nIdx);
+                    }
+                }
+            }
+
+            // Fallback if flood fill was too sparse.
+            if (queue.length < 12) {
+                for (let y = 0; y < cutoffY; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const idx = y * w + x;
+                        if (alpha[idx] >= ZOMBIE_MASK_ALPHA_THRESHOLD) headMask[idx] = 1;
+                    }
+                }
+            }
+        } else {
+            for (let y = 0; y < cutoffY; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = y * w + x;
+                    if (alpha[idx] >= ZOMBIE_MASK_ALPHA_THRESHOLD) headMask[idx] = 1;
+                }
+            }
+        }
+
+        // Merge in upper sprite silhouette band so top-dome/forehead shots register reliably.
+        for (let x = 0; x < w; x++) {
+            const top = columnTop[x];
+            const limit = columnHeadLimit[x];
+            if (top < 0 || limit < top) continue;
+            for (let y = top; y <= limit; y++) {
+                const idx = y * w + x;
+                if (alpha[idx] >= ZOMBIE_MASK_ALPHA_THRESHOLD) headMask[idx] = 1;
+            }
+        }
+
+        const headHitMask = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = y * w + x;
+                if (!headMask[idx]) continue;
+                for (let oy = -ZOMBIE_HEADSHOT_EXPAND_UP; oy <= ZOMBIE_HEADSHOT_EXPAND_DOWN; oy++) {
+                    for (let ox = -ZOMBIE_HEADSHOT_EXPAND_X; ox <= ZOMBIE_HEADSHOT_EXPAND_X; ox++) {
+                        const nx = x + ox;
+                        const ny = y + oy;
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                        // Elliptical expansion, biased upward for dome glancing hits.
+                        if ((ox * ox) / 4 + (oy * oy) / 9 > 1.8) continue;
+                        headHitMask[ny * w + nx] = 1;
+                    }
+                }
+            }
+        }
+
+        return { w, h, alpha, headMask, headHitMask, columnHeadLimit };
+    } catch (err) {
+        return null;
+    }
 }
 
 // ─── WORLD GENERATION ──────────────────────────────────────
@@ -142,10 +282,10 @@ function generateWorld() {
     // ─── STRUCTURED TOWN LAYOUT ───────────────────────────
     createRoadGrid();
     createTownCore();
-    addStreetTrees();
     createResidentialRing();
-    createOpenFields();
     createIndustrialLots();
+    addStreetTrees();
+    createOpenFields();
     createBackdropTown();
 
     // ─── Farm Outskirts (Outer Lots) ─────────────────────
@@ -159,8 +299,9 @@ function generateWorld() {
     ];
 
     for (let lot of farmLots) {
-        let cx = lot.x + rand(-15, 15);
-        let cz = lot.z + rand(-15, 15);
+        const roadSide = lot.x >= 0 ? 1 : -1;
+        let cx = lot.x + roadSide * rand(14, 28);
+        let cz = lot.z + rand(-18, 18);
         createFarmLot(cx, cz, lot.size || 'medium');
     }
 
@@ -208,197 +349,383 @@ function generateWorld() {
 }
 
 function createRoadGrid() {
-    // Roads radiate OUT from the tower area (tower is at 0,0)
-    // Main roads extend outward like spokes, not crossing through center
+    const arterialW = CFG.STREET_WIDTH;
+    const collectorW = CFG.STREET_WIDTH - 8;
+    const ringDist = 255;
+    const ringSpan = 510;
+    const outerReach = 500;
+    const spineLen = outerReach - ringDist;
+    const outerBand = 430;
+    const ruralW = collectorW - 6;
+    const ruralSpan = 820;
 
-    // North road - starts away from tower, extends north
-    roads.push({ x: 0, z: -250, w: CFG.STREET_WIDTH, h: 300, type: 'road' });
+    // Main ring around the tower clearing.
+    addRoadSegment('ring_north', 0, -ringDist, ringSpan, arterialW, 'ring');
+    addRoadSegment('ring_south', 0, ringDist, ringSpan, arterialW, 'ring');
+    addRoadSegment('ring_east', ringDist, 0, arterialW, ringSpan, 'ring');
+    addRoadSegment('ring_west', -ringDist, 0, arterialW, ringSpan, 'ring');
 
-    // South road
-    roads.push({ x: 0, z: 250, w: CFG.STREET_WIDTH, h: 300, type: 'road' });
+    // Arterial spines heading to outer neighborhoods.
+    addRoadSegment('north_spine', 0, -(ringDist + spineLen / 2), arterialW, spineLen, 'arterial');
+    addRoadSegment('south_spine', 0, ringDist + spineLen / 2, arterialW, spineLen, 'arterial');
+    addRoadSegment('east_spine', ringDist + spineLen / 2, 0, spineLen, arterialW, 'arterial');
+    addRoadSegment('west_spine', -(ringDist + spineLen / 2), 0, spineLen, arterialW, 'arterial');
 
-    // East road
-    roads.push({ x: 250, z: 0, w: 300, h: CFG.STREET_WIDTH, type: 'road' });
+    // North neighborhood collectors.
+    addRoadSegment('north_collector_w', -120, -390, collectorW, 240, 'collector');
+    addRoadSegment('north_collector_e', 120, -390, collectorW, 240, 'collector');
+    addRoadSegment('north_collector_mid', 0, -390, 340, collectorW, 'collector');
 
-    // West road
-    roads.push({ x: -250, z: 0, w: 300, h: CFG.STREET_WIDTH, type: 'road' });
+    // South neighborhood collectors.
+    addRoadSegment('south_collector_w', -120, 390, collectorW, 240, 'collector');
+    addRoadSegment('south_collector_e', 120, 390, collectorW, 240, 'collector');
+    addRoadSegment('south_collector_mid', 0, 390, 340, collectorW, 'collector');
 
-    // Ring road connecting the town areas (at ~200 units out)
-    // North segment
-    roads.push({ x: 0, z: -200, w: 350, h: CFG.STREET_WIDTH - 4, type: 'road' });
-    // South segment
-    roads.push({ x: 0, z: 200, w: 350, h: CFG.STREET_WIDTH - 4, type: 'road' });
-    // East segment
-    roads.push({ x: 200, z: 0, w: CFG.STREET_WIDTH - 4, h: 350, type: 'road' });
-    // West segment
-    roads.push({ x: -200, z: 0, w: CFG.STREET_WIDTH - 4, h: 350, type: 'road' });
+    // East neighborhood collectors.
+    addRoadSegment('east_collector_mid', 390, 0, collectorW, 340, 'collector');
+    addRoadSegment('east_collector_n', 390, -120, 240, collectorW, 'collector');
+    addRoadSegment('east_collector_s', 390, 120, 240, collectorW, 'collector');
+
+    // West neighborhood collectors.
+    addRoadSegment('west_collector_mid', -390, 0, collectorW, 340, 'collector');
+    addRoadSegment('west_collector_n', -390, -120, 240, collectorW, 'collector');
+    addRoadSegment('west_collector_s', -390, 120, 240, collectorW, 'collector');
+
+    // Sparse rural perimeter roads for outlying farms and depots.
+    addRoadSegment('outer_north', 0, -outerBand, ruralSpan, ruralW, 'rural');
+    addRoadSegment('outer_south', 0, outerBand, ruralSpan, ruralW, 'rural');
+    addRoadSegment('outer_east', outerBand, 0, ruralW, ruralSpan, 'rural');
+    addRoadSegment('outer_west', -outerBand, 0, ruralW, ruralSpan, 'rural');
+}
+
+function addRoadSegment(name, x, z, w, h, kind) {
+    roads.push({ x, z, w, h, type: 'road', kind, name });
+}
+
+function getRoadByName(name) {
+    return roads.find(r => r.name === name);
+}
+
+function isNearRoad(x, z, padding = 0, roadKinds = null) {
+    for (let road of roads) {
+        if (roadKinds && !roadKinds.includes(road.kind)) continue;
+        if (
+            Math.abs(x - road.x) < (road.w / 2 + padding) &&
+            Math.abs(z - road.z) < (road.h / 2 + padding)
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getRingOuterSide(road) {
+    if (!road) return 0;
+    if (road.name === 'ring_north') return -1;
+    if (road.name === 'ring_south') return 1;
+    if (road.name === 'ring_east') return 1;
+    if (road.name === 'ring_west') return -1;
+    return 0;
+}
+
+function pickZoneFromWeights(zoneWeights) {
+    let entries = Object.entries(zoneWeights).filter(([, weight]) => weight > 0);
+    if (entries.length === 0) return 'residential';
+
+    let total = 0;
+    for (let [, weight] of entries) total += weight;
+
+    let roll = rand(0, total);
+    for (let [zone, weight] of entries) {
+        roll -= weight;
+        if (roll <= 0) return zone;
+    }
+    return entries[entries.length - 1][0];
+}
+
+function placeBuildingsAlongRoad(road, opts = {}) {
+    if (!road) return;
+
+    const isVertical = road.h > road.w;
+    const len = isVertical ? road.h : road.w;
+    const roadWidth = isVertical ? road.w : road.h;
+
+    const edgeInset = opts.edgeInset ?? 24;
+    const frontageMin = opts.frontageMin ?? 24;
+    const frontageMax = opts.frontageMax ?? 36;
+    const depthMin = opts.depthMin ?? 22;
+    const depthMax = opts.depthMax ?? 34;
+    const gapMin = opts.gapMin ?? 16;
+    const gapMax = opts.gapMax ?? 28;
+    const setbackMin = opts.setbackMin ?? 10;
+    const setbackMax = opts.setbackMax ?? 18;
+    const sideChance = opts.sideChance ?? 0.6;
+    const minRadius = opts.minRadius ?? 190;
+    const yardTreeChance = opts.yardTreeChance ?? 0.25;
+    const sides = opts.sides || [-1, 1];
+    const zoneWeights = opts.zoneWeights || { residential: 1 };
+
+    let cursor = -len / 2 + edgeInset + rand(0, 8);
+    let end = len / 2 - edgeInset;
+
+    while (cursor < end - frontageMin) {
+        let frontage = rand(frontageMin, frontageMax);
+        if (cursor + frontage > end) break;
+
+        for (let side of sides) {
+            if (side === 0 || Math.random() > sideChance) continue;
+
+            let lotDepth = rand(depthMin, depthMax);
+            let setback = rand(setbackMin, setbackMax);
+            let bx, bz, bw, bd;
+
+            if (isVertical) {
+                bw = lotDepth;
+                bd = frontage;
+                bx = road.x + side * (roadWidth / 2 + setback + bw / 2);
+                bz = road.z + cursor + frontage / 2;
+            } else {
+                bw = frontage;
+                bd = lotDepth;
+                bx = road.x + cursor + frontage / 2;
+                bz = road.z + side * (roadWidth / 2 + setback + bd / 2);
+            }
+
+            if (Math.hypot(bx, bz) < minRadius) continue;
+
+            let blockRadius = Math.max(bw, bd) * 0.6 + 8;
+            if (isBlocked(bx, bz, blockRadius)) continue;
+
+            createBuilding(bx, bz, bw, bd, pickZoneFromWeights(zoneWeights));
+
+            if (Math.random() < yardTreeChance) {
+                maybePlantLotTree(bx, bz, bw, bd, isVertical, side, minRadius);
+            }
+        }
+
+        cursor += frontage + rand(gapMin, gapMax);
+    }
+}
+
+function maybePlantLotTree(bx, bz, bw, bd, isVertical, side, minRadius) {
+    let tx, tz;
+    if (isVertical) {
+        tx = bx + side * (bw / 2 + rand(8, 15));
+        tz = bz + rand(-bd * 0.32, bd * 0.32);
+    } else {
+        tx = bx + rand(-bw * 0.32, bw * 0.32);
+        tz = bz + side * (bd / 2 + rand(8, 15));
+    }
+
+    if (Math.hypot(tx, tz) < minRadius - 20) return;
+    if (isBlocked(tx, tz, 10)) return;
+
+    trees.push({
+        x: tx,
+        z: tz,
+        h: rand(16, 25),
+        trunkH: rand(5, 9),
+        radius: rand(8, 12),
+        type: Math.random() < 0.35 ? 'pine' : 'oak'
+    });
 }
 
 function createTownCore() {
-    // Buildings placed AWAY from tower (tower at 0,0)
-    // Town clusters in 4 quadrants at ~180-280 units from center
+    const ringConfigs = [
+        { name: 'ring_north', zoneWeights: { downtown: 0.26, midtown: 0.54, residential: 0.20 } },
+        { name: 'ring_east', zoneWeights: { downtown: 0.20, midtown: 0.55, residential: 0.25 } },
+        { name: 'ring_south', zoneWeights: { midtown: 0.35, residential: 0.65 } },
+        { name: 'ring_west', zoneWeights: { midtown: 0.30, residential: 0.70 } },
+    ];
 
-    // Northeast cluster (downtown feel)
-    createBuildingCluster(180, -180, 'downtown', 4);
+    for (let cfg of ringConfigs) {
+        let road = getRoadByName(cfg.name);
+        if (!road) continue;
+        placeBuildingsAlongRoad(road, {
+            sides: [getRingOuterSide(road)],
+            zoneWeights: cfg.zoneWeights,
+            minRadius: 230,
+            edgeInset: 52,
+            frontageMin: 32,
+            frontageMax: 46,
+            depthMin: 24,
+            depthMax: 34,
+            gapMin: 30,
+            gapMax: 44,
+            setbackMin: 16,
+            setbackMax: 26,
+            sideChance: 0.62,
+            yardTreeChance: 0.14
+        });
+    }
 
-    // Northwest cluster
-    createBuildingCluster(-180, -180, 'midtown', 3);
+    const spineConfigs = [
+        { name: 'north_spine', zoneWeights: { downtown: 0.12, midtown: 0.54, residential: 0.34 } },
+        { name: 'south_spine', zoneWeights: { midtown: 0.28, residential: 0.72 } },
+        { name: 'east_spine', zoneWeights: { downtown: 0.08, midtown: 0.50, residential: 0.42 } },
+        { name: 'west_spine', zoneWeights: { midtown: 0.30, residential: 0.70 } },
+    ];
 
-    // Southeast cluster
-    createBuildingCluster(180, 180, 'midtown', 3);
-
-    // Southwest cluster
-    createBuildingCluster(-180, 180, 'midtown', 3);
-
-    // Buildings along the ring road
-    // North side of ring
-    createBuilding(-80, -220, rand(30, 45), rand(25, 35), 'midtown');
-    createBuilding(80, -220, rand(30, 45), rand(25, 35), 'midtown');
-
-    // South side of ring
-    createBuilding(-90, 220, rand(30, 45), rand(25, 35), 'residential');
-    createBuilding(90, 220, rand(30, 45), rand(25, 35), 'residential');
-
-    // East side of ring
-    createBuilding(220, -80, rand(30, 45), rand(25, 35), 'midtown');
-    createBuilding(220, 80, rand(30, 45), rand(25, 35), 'residential');
-
-    // West side of ring
-    createBuilding(-220, -80, rand(30, 45), rand(25, 35), 'residential');
-    createBuilding(-220, 80, rand(30, 45), rand(25, 35), 'residential');
-}
-
-function createBuildingCluster(cx, cz, zone, count) {
-    // Create a small cluster of buildings
-    for (let i = 0; i < count; i++) {
-        let angle = (i / count) * Math.PI * 2 + rand(-0.3, 0.3);
-        let dist = rand(25, 55);
-        let x = cx + Math.cos(angle) * dist;
-        let z = cz + Math.sin(angle) * dist;
-        let w = rand(25, 40);
-        let d = rand(25, 40);
-        createBuilding(x, z, w, d, zone);
+    for (let cfg of spineConfigs) {
+        placeBuildingsAlongRoad(getRoadByName(cfg.name), {
+            zoneWeights: cfg.zoneWeights,
+            minRadius: 260,
+            edgeInset: 30,
+            frontageMin: 30,
+            frontageMax: 42,
+            depthMin: 24,
+            depthMax: 34,
+            gapMin: 30,
+            gapMax: 46,
+            setbackMin: 18,
+            setbackMax: 30,
+            sideChance: 0.32,
+            yardTreeChance: 0.18
+        });
     }
 }
 
 function createResidentialRing() {
-    // Residential areas further out from downtown (280-350 units from center)
+    const collectorRoads = [
+        'north_collector_w', 'north_collector_e', 'north_collector_mid',
+        'south_collector_w', 'south_collector_e', 'south_collector_mid',
+        'east_collector_mid', 'east_collector_n', 'east_collector_s',
+        'west_collector_mid', 'west_collector_n', 'west_collector_s',
+    ];
 
-    // North residential area
-    createResidentialArea(0, -300, 5);
-
-    // South residential area
-    createResidentialArea(0, 300, 5);
-
-    // East residential area
-    createResidentialArea(300, 0, 4);
-
-    // West residential area
-    createResidentialArea(-300, 0, 4);
-
-    // Diagonal residential pockets
-    createResidentialArea(260, -260, 3);
-    createResidentialArea(-260, 260, 3);
-}
-
-function createResidentialArea(cx, cz, count) {
-    for (let i = 0; i < count; i++) {
-        let angle = (i / count) * Math.PI * 2 + rand(-0.4, 0.4);
-        let dist = rand(20, 60);
-        let x = cx + Math.cos(angle) * dist;
-        let z = cz + Math.sin(angle) * dist;
-
-        // House
-        let w = rand(22, 32);
-        let d = rand(22, 32);
-        createBuilding(x, z, w, d, 'residential');
-
-        // Yard tree
-        if (Math.random() > 0.3) {
-            trees.push({
-                x: x + rand(-25, 25),
-                z: z + rand(-25, 25),
-                h: rand(16, 26),
-                trunkH: rand(5, 9),
-                radius: rand(8, 13),
-                type: 'oak'
-            });
-        }
+    for (let roadName of collectorRoads) {
+        placeBuildingsAlongRoad(getRoadByName(roadName), {
+            zoneWeights: { residential: 0.86, midtown: 0.14 },
+            minRadius: 280,
+            edgeInset: 24,
+            frontageMin: 24,
+            frontageMax: 34,
+            depthMin: 20,
+            depthMax: 30,
+            gapMin: 34,
+            gapMax: 56,
+            setbackMin: 20,
+            setbackMax: 32,
+            sideChance: 0.24,
+            yardTreeChance: 0.26
+        });
     }
 }
 
 function createOpenFields() {
-    // Open areas around the tower (within 150 units) with scattered vegetation
-    // This creates the "you're in a field watching the town" feel
+    const clearRadius = 195;
+    const corridorHalfWidth = 48;
 
-    // Scattered trees in the open area near tower
-    for (let i = 0; i < 12; i++) {
+    function inViewCorridor(x, z) {
+        return Math.abs(x) < corridorHalfWidth || Math.abs(z) < corridorHalfWidth;
+    }
+
+    let placedTrees = 0;
+    for (let attempts = 0; attempts < 170 && placedTrees < 5; attempts++) {
         let angle = rand(0, Math.PI * 2);
-        let dist = rand(60, 140);
+        let dist = rand(clearRadius + 8, 230);
         let x = Math.cos(angle) * dist;
         let z = Math.sin(angle) * dist;
 
+        if (
+            inViewCorridor(x, z) ||
+            isBlocked(x, z, 16) ||
+            isNearRoad(x, z, 12, ['ring', 'arterial', 'collector'])
+        ) continue;
+
         trees.push({
-            x: x, z: z,
-            h: rand(20, 35),
+            x,
+            z,
+            h: rand(20, 34),
             trunkH: rand(6, 12),
-            radius: rand(10, 16),
-            type: Math.random() > 0.5 ? 'pine' : 'oak'
+            radius: rand(9, 15),
+            type: Math.random() > 0.55 ? 'pine' : 'oak'
         });
+        placedTrees += 1;
     }
 
-    // Bushes scattered in the open area
-    for (let i = 0; i < 25; i++) {
+    let placedBushes = 0;
+    for (let attempts = 0; attempts < 260 && placedBushes < 11; attempts++) {
         let angle = rand(0, Math.PI * 2);
-        let dist = rand(40, 160);
+        let dist = rand(120, 240);
+        let x = Math.cos(angle) * dist;
+        let z = Math.sin(angle) * dist;
+
+        if (
+            inViewCorridor(x, z) ||
+            isBlocked(x, z, 8) ||
+            isNearRoad(x, z, 8, ['ring', 'arterial', 'collector'])
+        ) continue;
+
         bushes.push({
-            x: Math.cos(angle) * dist,
-            z: Math.sin(angle) * dist,
-            size: rand(2.5, 4.5),
+            x,
+            z,
+            size: rand(2.5, 4.2),
             color: pick(['#2d4c1e', '#345a28', '#27401d', '#3a5530'])
         });
+        placedBushes += 1;
     }
 
-    // Meadow patches between town areas
-    let meadowLocations = [
-        { x: 100, z: -100 },
-        { x: -100, z: 100 },
-        { x: 100, z: 100 },
-        { x: -100, z: -100 },
+    let meadowCenters = [
+        { x: 220, z: -170 },
+        { x: -220, z: 175 },
+        { x: 210, z: 180 },
+        { x: -215, z: -170 },
     ];
 
-    for (let meadow of meadowLocations) {
+    for (let meadow of meadowCenters) {
         let cx = meadow.x + rand(-20, 20);
         let cz = meadow.z + rand(-20, 20);
 
-        // A few trees
-        for (let t = 0; t < 2; t++) {
-            trees.push({
-                x: cx + rand(-30, 30),
-                z: cz + rand(-30, 30),
-                h: rand(18, 28),
-                trunkH: rand(6, 10),
-                radius: rand(9, 14),
-                type: Math.random() > 0.6 ? 'pine' : 'oak'
-            });
+        for (let i = 0; i < 4; i++) {
+            let bx = cx + rand(-34, 34);
+            let bz = cz + rand(-34, 34);
+            if (!isBlocked(bx, bz, 8) && !isNearRoad(bx, bz, 8, ['ring', 'arterial', 'collector'])) {
+                bushes.push({
+                    x: bx,
+                    z: bz,
+                    size: rand(2.4, 3.8),
+                    color: pick(['#2d4c1e', '#345a28', '#27401d'])
+                });
+            }
         }
 
-        // Some bushes
-        for (let b = 0; b < 4; b++) {
-            bushes.push({
-                x: cx + rand(-40, 40),
-                z: cz + rand(-40, 40),
-                size: rand(2.5, 4),
-                color: pick(['#2d4c1e', '#345a28', '#27401d'])
-            });
+        if (Math.random() > 0.45) {
+            let tx = cx + rand(-22, 22);
+            let tz = cz + rand(-22, 22);
+            if (
+                !isBlocked(tx, tz, 14) &&
+                !isNearRoad(tx, tz, 10, ['ring', 'arterial', 'collector']) &&
+                Math.hypot(tx, tz) > clearRadius - 10
+            ) {
+                trees.push({
+                    x: tx,
+                    z: tz,
+                    h: rand(18, 28),
+                    trunkH: rand(6, 10),
+                    radius: rand(9, 13),
+                    type: Math.random() > 0.6 ? 'pine' : 'oak'
+                });
+            }
         }
     }
 }
 
 function createIndustrialLots() {
-    // Industrial area further out (350+ units)
-    createIndustrialCluster(350, -150);
-    createIndustrialCluster(-340, 180);
+    // Industrial frontage near outer arterial corridors.
+    createIndustrialCluster(404, -132, 'vertical');
+    createIndustrialCluster(-404, 128, 'vertical');
+
+    let serviceYards = [
+        { x: 150, z: -398, w: rand(46, 58), d: rand(36, 46) },
+        { x: -150, z: 398, w: rand(44, 56), d: rand(34, 44) },
+    ];
+
+    for (let yard of serviceYards) {
+        if (!isBlocked(yard.x, yard.z, 34)) {
+            createBuilding(yard.x, yard.z, yard.w, yard.d, 'industrial');
+        }
+    }
 }
 
 function createBackdropTown() {
@@ -425,51 +752,72 @@ function createBackdropTown() {
     }
 }
 
-// Trees along roads in town areas
 function addStreetTrees() {
-    // Trees along the ring road
-    let roadTreeSpots = [
-        // North road trees
-        { x: 30, z: -200 }, { x: -30, z: -200 },
-        { x: 30, z: -250 }, { x: -30, z: -250 },
-        // South road trees
-        { x: 30, z: 200 }, { x: -30, z: 200 },
-        { x: 30, z: 250 }, { x: -30, z: 250 },
-        // East road trees
-        { x: 200, z: 30 }, { x: 200, z: -30 },
-        { x: 250, z: 30 }, { x: 250, z: -30 },
-        // West road trees
-        { x: -200, z: 30 }, { x: -200, z: -30 },
-        { x: -250, z: 30 }, { x: -250, z: -30 },
-    ];
+    for (let road of roads) {
+        if (road.kind !== 'ring' && road.kind !== 'arterial') continue;
 
-    for (let spot of roadTreeSpots) {
-        trees.push({
-            x: spot.x + rand(-5, 5),
-            z: spot.z + rand(-5, 5),
-            h: rand(18, 28),
-            trunkH: rand(6, 10),
-            radius: rand(9, 14),
-            type: 'oak'
-        });
+        let isVertical = road.h > road.w;
+        let len = isVertical ? road.h : road.w;
+        let width = isVertical ? road.w : road.h;
+        let edgeInset = road.kind === 'ring' ? 34 : 20;
+        let spacing = road.kind === 'ring' ? 86 : 78;
+        let spawnChance = road.kind === 'ring' ? 0.36 : 0.24;
+        let sides = road.kind === 'ring' ? [getRingOuterSide(road)] : [-1, 1];
+
+        for (let side of sides) {
+            if (side === 0) continue;
+
+            for (let t = -len / 2 + edgeInset; t <= len / 2 - edgeInset; t += spacing) {
+                if (Math.random() > spawnChance) continue;
+
+                let tx, tz;
+                if (isVertical) {
+                    tx = road.x + side * (width / 2 + rand(10, 15));
+                    tz = road.z + t + rand(-5, 5);
+                } else {
+                    tx = road.x + t + rand(-5, 5);
+                    tz = road.z + side * (width / 2 + rand(10, 15));
+                }
+
+                if (Math.hypot(tx, tz) < 185) continue;
+                if (isBlocked(tx, tz, 11)) continue;
+
+                trees.push({
+                    x: tx,
+                    z: tz,
+                    h: rand(17, 27),
+                    trunkH: rand(5, 9),
+                    radius: rand(8, 12),
+                    type: Math.random() < 0.25 ? 'pine' : 'oak'
+                });
+            }
+        }
     }
 }
 
-function createIndustrialCluster(cx, cz) {
-    // Main warehouse
-    createBuilding(cx, cz, rand(60, 80), rand(45, 60), 'industrial');
+function createIndustrialCluster(cx, cz, orientation = 'horizontal') {
+    const alongX = orientation !== 'vertical';
 
-    // Secondary building
-    createBuilding(cx + rand(70, 90), cz + rand(-20, 20), rand(45, 60), rand(35, 50), 'industrial');
+    function tryPlaceIndustrial(x, z, w, d) {
+        if (isNearRoad(x, z, 6, ['ring', 'arterial', 'collector', 'rural'])) return;
+        if (isBlocked(x, z, Math.max(w, d) * 0.62 + 8)) return;
+        createBuilding(x, z, w, d, 'industrial');
+    }
 
-    // Small storage or office
-    createBuilding(cx + rand(30, 50), cz + rand(50, 70), rand(30, 40), rand(25, 35), 'industrial');
+    tryPlaceIndustrial(cx, cz, rand(58, 78), rand(42, 56));
 
-    // A few industrial bushes/shrubs around
+    if (alongX) {
+        tryPlaceIndustrial(cx + rand(74, 96), cz + rand(-16, 16), rand(44, 58), rand(34, 48));
+        tryPlaceIndustrial(cx + rand(34, 56), cz + rand(52, 72), rand(30, 40), rand(24, 34));
+    } else {
+        tryPlaceIndustrial(cx + rand(-16, 16), cz + rand(74, 96), rand(44, 58), rand(34, 48));
+        tryPlaceIndustrial(cx + rand(52, 72), cz + rand(34, 56), rand(30, 40), rand(24, 34));
+    }
+
     for (let i = 0; i < 4; i++) {
         bushes.push({
-            x: cx + rand(-30, 100),
-            z: cz + rand(-40, 80),
+            x: cx + rand(-32, 98),
+            z: cz + rand(-42, 82),
             size: rand(2, 4),
             color: '#2a4018'
         });
@@ -643,6 +991,7 @@ function createForestPatch(cx, cz, size) {
         let type = Math.random() < 0.5 ? 'pine' : 'oak';
         let tx = cx + rand(-spread, spread);
         let tz = cz + rand(-spread, spread);
+        if (isNearRoad(tx, tz, 8, ['arterial', 'collector', 'rural'])) continue;
 
         trees.push({
             x: tx, z: tz,
@@ -656,9 +1005,12 @@ function createForestPatch(cx, cz, size) {
     // Add underbrush
     let bushCount = Math.floor(count * 0.6);
     for (let i = 0; i < bushCount; i++) {
+        let bx = cx + rand(-spread * 0.8, spread * 0.8);
+        let bz = cz + rand(-spread * 0.8, spread * 0.8);
+        if (isNearRoad(bx, bz, 6, ['arterial', 'collector', 'rural'])) continue;
         bushes.push({
-            x: cx + rand(-spread * 0.8, spread * 0.8),
-            z: cz + rand(-spread * 0.8, spread * 0.8),
+            x: bx,
+            z: bz,
             size: rand(2, 4),
             color: pick(['#1e3a16', '#2a4520', '#1c3212'])
         });
@@ -750,6 +1102,23 @@ function project(wx, wy, wz) {
     return { x: sx, y: sy, depth: fz, scale: scale / fz };
 }
 
+function depthAlongView(wx, wz) {
+    let cy = Math.cos(yaw);
+    let sy = Math.sin(yaw);
+    return -wx * sy + wz * cy;
+}
+
+function getPitchMin() {
+    // Allow steeper downward aim at higher zoom for close targets.
+    let zoomT = (zoom - CFG.MIN_ZOOM) / (CFG.MAX_ZOOM - CFG.MIN_ZOOM);
+    zoomT = clamp(zoomT, 0, 1);
+    return lerp(-0.6, -0.95, zoomT);
+}
+
+function clampPitchToView() {
+    pitch = clamp(pitch, getPitchMin(), Math.PI / 2 - 0.02);
+}
+
 // ─── UPDATE ────────────────────────────────────────────────
 let lastTime = 0;
 function update(dt) {
@@ -813,6 +1182,13 @@ function update(dt) {
     }
     particles = particles.filter(p => p.life > 0);
 
+    // Streak popups
+    for (let popup of streakPopups) {
+        popup.life -= dt;
+        popup.rise += dt * (popup.big ? 44 : 30);
+    }
+    streakPopups = streakPopups.filter(popup => popup.life > 0);
+
     // Muzzle flash / recoil
     if (muzzleFlash > 0) muzzleFlash -= dt * 8;
     if (recoilT > 0) recoilT -= dt * 5;
@@ -875,13 +1251,15 @@ function drawScene() {
     // Buildings
     for (let b of buildings) {
         let p = project(b.x, b.h / 2, b.z);
-        if (p) drawList.push({ type: 'building', obj: b, depth: p.depth, proj: p });
+        let depth = depthAlongView(b.x, b.z);
+        if (p && depth > 1) drawList.push({ type: 'building', obj: b, depth, proj: p });
     }
 
     // Distant skyline
     for (let b of backdrops) {
         let p = project(b.x, b.h / 2, b.z);
-        if (p) drawList.push({ type: 'backdrop', obj: b, depth: p.depth, proj: p });
+        let depth = depthAlongView(b.x, b.z);
+        if (p && depth > 1) drawList.push({ type: 'backdrop', obj: b, depth, proj: p });
     }
 
     // Particles
@@ -893,19 +1271,22 @@ function drawScene() {
     // Trees
     for (let t of trees) {
         let p = project(t.x, t.h / 2, t.z);
-        if (p) drawList.push({ type: 'tree', obj: t, depth: p.depth, proj: p });
+        let depth = depthAlongView(t.x, t.z);
+        if (p && depth > 1) drawList.push({ type: 'tree', obj: t, depth, proj: p });
     }
 
     // Bushes
     for (let b of bushes) {
         let p = project(b.x, b.size / 2, b.z);
-        if (p) drawList.push({ type: 'bush', obj: b, depth: p.depth, proj: p });
+        let depth = depthAlongView(b.x, b.z);
+        if (p && depth > 1) drawList.push({ type: 'bush', obj: b, depth, proj: p });
     }
 
     // Fences
     for (let f of fences) {
         let p = project(f.x, 2, f.z);
-        if (p) drawList.push({ type: 'fence', obj: f, depth: p.depth, proj: p });
+        let depth = depthAlongView(f.x, f.z);
+        if (p && depth > 1) drawList.push({ type: 'fence', obj: f, depth, proj: p });
     }
 
     // Clouds (drawn after sorting)
@@ -917,7 +1298,8 @@ function drawScene() {
     // Zombies
     for (let z of zombies) {
         let p = project(z.x, z.height / 2, z.z);
-        if (p) drawList.push({ type: 'zombie', obj: z, depth: p.depth, proj: p });
+        let depth = depthAlongView(z.x, z.z);
+        if (p && depth > 1) drawList.push({ type: 'zombie', obj: z, depth, proj: p });
     }
 
     // Sort back to front
@@ -951,154 +1333,104 @@ function drawScene() {
 }
 
 function drawAtmosphere() {
-    const theme = THEMES[themeIndex];
     let horizon = H * 0.35;
-    let haze = ctx.createLinearGradient(0, horizon, 0, H);
+    let haze = ctx.createLinearGradient(0, horizon - H * 0.06, 0, H);
     haze.addColorStop(0, `rgba(20,25,35,0)`);
-    haze.addColorStop(0.5, `rgba(20,25,35,0.12)`);
+    haze.addColorStop(0.45, `rgba(20,25,35,0.11)`);
     haze.addColorStop(1, `rgba(15,18,25,0.35)`);
     ctx.fillStyle = haze;
-    ctx.fillRect(0, horizon, W, H - horizon);
+    ctx.fillRect(0, horizon - H * 0.06, W, H - horizon + H * 0.06);
 
-    ctx.fillStyle = theme.clouds.replace('0.35', '0.18');
-    ctx.fillRect(0, horizon - 40, W, 80);
+    // Soft cloud veil near horizon. Avoid a hard full-width rectangle band.
+    let veil = ctx.createLinearGradient(0, horizon - H * 0.1, 0, horizon + H * 0.14);
+    veil.addColorStop(0, 'rgba(80,95,120,0)');
+    veil.addColorStop(0.45, 'rgba(80,95,120,0.07)');
+    veil.addColorStop(1, 'rgba(80,95,120,0)');
+    ctx.fillStyle = veil;
+    ctx.fillRect(0, horizon - H * 0.12, W, H * 0.28);
 }
 
 function drawNavMarkers() {
-    // 5 minutes = 300,000 ms
-    // DEBUG: use 5000 (5s) for testing if needed. Using 300000 per request.
     if (Date.now() - roundStartTime < 300000) return;
 
     const cx = W / 2;
     const cy = H / 2;
+    const edgePad = 34;
 
     for (let z of zombies) {
         if (z.dead) continue;
 
-        let p = project(z.x, z.height / 2, z.z);
-        let onScreen = false;
-        if (p && p.depth > 1 && p.x > 0 && p.x < W && p.y > 0 && p.y < H) {
-            onScreen = true;
-        }
+        const headP = project(z.x, z.height * 0.92, z.z);
+        const torsoP = project(z.x, z.height * 0.5, z.z);
+        if (!headP || !torsoP || headP.depth <= 1) continue;
 
-        if (!onScreen) {
-            // Calculate direction relative to camera
-            // Camera pos: we assume (0, TOWER_HEIGHT, 0) effectively for calculation, 
-            // but we need relative angle to the look direction (yaw).
+        const onScreen =
+            headP.x > edgePad &&
+            headP.x < W - edgePad &&
+            headP.y > edgePad &&
+            headP.y < H - edgePad;
 
-            // Simple 2D angle from center (0,0) since player is on tower
-            // Player is always at (0,0) in world space looking at 'yaw'
-
-            let dx = z.x;
-            let dz = z.z;
-            let angleToZombie = Math.atan2(dz, dx);
-
-            // Relative to look direction
-            let relAngle = angleToZombie - yaw - Math.PI / 2;
-            // Correct mapping so straight ahead is -PI/2 in world? 
-            // Let's re-verify:
-            // World Space: +Z is "down", +X is "right".
-            // Camera yaw 0: Looking +Z? 
-            // project fn: ex = dx * cos(yaw) + dz * sin(yaw)
-            // If yaw=0: ex = dx, ez = dz. "Forward" is usually +Z. 
-            // Actually, in 2D top down, usually 0 is East (+X).
-            // Let's use the projection logic to find screen edge position.
-
-            // Alternative: Use 3D projection of the zombie, even if behind.
-            // If behind (depth < 0), we invert?
-            // Safer: Just compute angle on screen.
-
-            // Let's stick to 2D math for "compass" style
-            let screenAngle = angleToZombie - (yaw + Math.PI / 2);
-            // yaw is rotation of camera.
-            // If I look at Z (yaw=Pi/2?), and zombie is at Z, angle should be "up".
-
-            // Let's use the transform code from project():
-            // ex, ez are camera-space coordinates (before perspective).
-            // ex is left-right, ez is depth (forward).
-            // but 'ez' in project() was: -dx*s + dz*c.  Wait.
-
-            // Copied from project():
-            let cy = Math.cos(yaw), sy = Math.sin(yaw);
-            let ex = dx * cy + dz * sy; // Camera Space X
-            let ez = -dx * sy + dz * cy; // Camera Space Z (Depth)
-
-            // If ez > 0, it's in front. If ez < 0, behind.
-            // Angle in screen space:
-            let angle = Math.atan2(ez, ex);
-            // ex positive = right, ez positive = forward.
-            // visual angle on screen? 
-
-            // Let's map this to unit circle on screen.
-            // We want an arrow at the edge of the screen.
-
-            let padding = 30;
-            let arrowDist = Math.min(W, H) / 2 - padding;
-
-            // We need to map (ex, ez) to screen (sx, sy).
-            // But if it's behind, we need to invert.
-
-            // Simpler: Just point at them.
-            // vector (ex, ez) roughly maps to screen (x, -y) because screen Y is down?
-            // Actually, ez is depth. forward is up on screen? No, project maps fz to distance.
-
-            // Let's just use the screen center and (ex, ez).
-            // Screen X is proportional to ex.
-            // Screen Y is proportional to ... pitch affects Y.
-            // For a simple horizontal compass:
-            // If we ignore pitch, 'ex' tells us if it's left or right. 'ez' tells us front/back.
-
-            // Marker Logic:
+        if (onScreen) {
+            const bodyPx = Math.max(9, torsoP.y - headP.y);
+            const markerY = headP.y - Math.max(12, bodyPx * 0.55);
             ctx.save();
-            ctx.translate(cx, cy);
+            ctx.globalAlpha = 0.92;
 
-            // Angle visually on 2D plane of the screen
-            // If ex > 0 (Right), ez > 0 (Front) -> Top Right? 
-            // Standard FPS radar: Forward is Up => -90 deg visual?
-            // Let's assume standard math: atan2(y, x).
-            // x = ex. y = -ez (since screen Y is down, and forward Z is usually "into" screen, so 'up' visually).
-            // Wait, if ez is depth, and we look forward, displayed Y is ... 
-            // project: sy = H/2 - (fy/fz)*scale.
-            // If we ignore pitch (assume horiz look), fy ~ dy ~ height diff. Not useful for direction.
-            // We want "bearing".
-
-            let bearing = Math.atan2(ex, ez);
-            // bearing 0 (ex=0, ez=1) => Forward (Center).
-            // bearing pi/2 (ex=1, ez=0) => Right.
-
-            // Visually on screen:
-            // Forward (0) should be UP (-PI/2).
-            // Right (PI/2) should be RIGHT (0).
-            // So screenAngle = bearing - PI/2.
-
-            let visualAngle = bearing - Math.PI / 2;
-
-            // Clamp to screen edge rect
-            // Start vector from center
-            let vx = Math.cos(visualAngle);
-            let vy = Math.sin(visualAngle);
-
-            // Ray intersect with screen bounds [-W/2, W/2] x [-H/2, H/2]
-            let tX = (W / 2 - 40) / Math.abs(vx);
-            let tY = (H / 2 - 40) / Math.abs(vy);
-            let t = Math.min(tX, tY);
-
-            let mx = vx * t;
-            let my = vy * t;
-
-            // Draw Arrow
-            ctx.translate(mx, my);
-            ctx.rotate(visualAngle);
-
-            ctx.fillStyle = '#ff4444';
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(-10, -5);
-            ctx.lineTo(-10, 5);
+            ctx.arc(headP.x, markerY, 9, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,70,70,0.18)';
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(headP.x, markerY + 7);
+            ctx.lineTo(headP.x - 6.5, markerY - 4.5);
+            ctx.lineTo(headP.x + 6.5, markerY - 4.5);
+            ctx.closePath();
+            ctx.fillStyle = '#ff5a5a';
             ctx.fill();
 
             ctx.restore();
+            continue;
         }
+
+        const c = Math.cos(yaw);
+        const s = Math.sin(yaw);
+        const ex = z.x * c + z.z * s;
+        const ez = -z.x * s + z.z * c;
+        let vx = ex;
+        let vy = -ez;
+        const mag = Math.hypot(vx, vy);
+        if (mag < 0.0001) continue;
+        vx /= mag;
+        vy /= mag;
+
+        const tX = (W / 2 - edgePad) / Math.max(Math.abs(vx), 0.0001);
+        const tY = (H / 2 - edgePad) / Math.max(Math.abs(vy), 0.0001);
+        const t = Math.min(tX, tY);
+
+        const px = cx + vx * t;
+        const py = cy + vy * t;
+        const angle = Math.atan2(vy, vx);
+
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(angle);
+        ctx.globalAlpha = 0.95;
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 10.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,70,70,0.18)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(9.5, 0);
+        ctx.lineTo(-5.5, -6);
+        ctx.lineTo(-5.5, 6);
+        ctx.closePath();
+        ctx.fillStyle = '#ff5a5a';
+        ctx.fill();
+
+        ctx.restore();
     }
 }
 
@@ -1189,8 +1521,12 @@ function drawXRayZombies() {
 function drawGround() {
     const theme = THEMES[themeIndex];
     // Render ground as grid of projected points
-    let groundColor = '#2a3a20';
-    let roadColor = '#3a3a35';
+    const roadFillByKind = {
+        ring: '#3a3a35',
+        arterial: '#373734',
+        collector: '#44433d',
+        rural: '#5a4c3a'
+    };
     // Simple: project corners of ground and fill
     let points = [];
     let steps = 20;
@@ -1215,10 +1551,11 @@ function drawGround() {
     }
 
     // Roads (Main Street + Cross Streets)
-    ctx.fillStyle = roadColor; // #3a3a35
     for (let r of roads) {
         // We draw roads as segments to handle projection/clipping better
         // and to ensure they lie flat on the ground (quads) instead of billboards
+        const roadFill = roadFillByKind[r.kind] || roadFillByKind.ring;
+        const shouldPaintCenterLine = r.kind === 'ring' || r.kind === 'arterial';
 
         let isVert = r.h > r.w;
         // Divide long roads into chunks
@@ -1238,9 +1575,7 @@ function drawGround() {
             let x1, z1, x2, z2, x3, z3, x4, z4;
 
             if (isVert) {
-                // N-S Road. Center r.x, r.z
-                let cz = r.z + start + (t + tEnd) / 2;
-                let segLen = tEnd - t;
+                // N-S Road
                 // 4 corners
                 // TL
                 x1 = r.x - width / 2; z1 = r.z + start + t;
@@ -1264,6 +1599,7 @@ function drawGround() {
             let p4 = project(x4, 0.2, z4);
 
             if (p1 && p2 && p3 && p4) {
+                ctx.fillStyle = roadFill;
                 ctx.beginPath();
                 ctx.moveTo(p1.x, p1.y);
                 ctx.lineTo(p2.x, p2.y);
@@ -1271,34 +1607,24 @@ function drawGround() {
                 ctx.lineTo(p4.x, p4.y);
                 ctx.fill();
 
-                // Markings (dashed line in middle)
-                ctx.strokeStyle = '#aa9';
-                ctx.lineWidth = 2 * p1.scale; // approx
-                ctx.beginPath();
-                let m1, m2;
-                if (isVert) {
-                    m1 = project(r.x, 0.2, z1);
-                    m2 = project(r.x, 0.2, z3); // z4 same
-                } else {
-                    m1 = project((x1 + x2) / 2, 0.2, z1); // Actually mid x
-                    // Wait, z is constant. x varies. 
-                    // x1 is start x. x2 is end x (TR). 
-                    // mid x is (x1+x2)/2? No. x1 and x2 are same x? No.
-                    // E-W: x1=start, x2=end?
-                    // My logic above:
-                    // x1 = start+t. z1 = -w/2.
-                    // x2 = start+tEnd. z2 = -w/2.
-                    // x3 = start+tEnd. z3 = +w/2.
-                    // x4 = start+t.    z4 = +w/2.
-                    // Midline is z = r.z. x goes from x1 to x2.
-                    m1 = project(x1, 0.2, r.z);
-                    m2 = project(x2, 0.2, r.z);
-                }
+                if (shouldPaintCenterLine) {
+                    ctx.strokeStyle = '#aa9';
+                    ctx.lineWidth = Math.max(0.75, 1.7 * p1.scale);
+                    ctx.beginPath();
+                    let m1, m2;
+                    if (isVert) {
+                        m1 = project(r.x, 0.2, z1);
+                        m2 = project(r.x, 0.2, z3);
+                    } else {
+                        m1 = project(x1, 0.2, r.z);
+                        m2 = project(x2, 0.2, r.z);
+                    }
 
-                if (m1 && m2) {
-                    ctx.moveTo(m1.x, m1.y);
-                    ctx.lineTo(m2.x, m2.y);
-                    ctx.stroke();
+                    if (m1 && m2) {
+                        ctx.moveTo(m1.x, m1.y);
+                        ctx.lineTo(m2.x, m2.y);
+                        ctx.stroke();
+                    }
                 }
             }
         }
@@ -1306,7 +1632,6 @@ function drawGround() {
 }
 
 function drawBuilding(b, p) {
-    const theme = THEMES[themeIndex];
     let x1 = b.x - b.w / 2;
     let x2 = b.x + b.w / 2;
     let z1 = b.z - b.d / 2;
@@ -1339,11 +1664,9 @@ function drawBuilding(b, p) {
         return;
     }
 
-    let viewX = -b.x;
-    let viewZ = -b.z;
-    let useLeft = viewX < 0;
-    let useFront = viewZ < 0;
-    let fog = fogAlpha(p.depth);
+    let useLeft = b.x > 0;
+    let useFront = b.z > 0;
+    let fog = fogAlpha(depthAlongView(b.x, b.z));
 
     function fillFace(points, fill, shadow) {
         ctx.beginPath();
@@ -1364,6 +1687,24 @@ function drawBuilding(b, p) {
         }
     }
 
+    function lerpPoint(p1, p2, t) {
+        return {
+            x: lerp(p1.x, p2.x, t),
+            y: lerp(p1.y, p2.y, t)
+        };
+    }
+
+    function fillQuad(points, fill) {
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        ctx.lineTo(points[1].x, points[1].y);
+        ctx.lineTo(points[2].x, points[2].y);
+        ctx.lineTo(points[3].x, points[3].y);
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.fill();
+    }
+
     const frontFace = useFront ? [a, b1, bt, at] : [d, c, ct, dt];
     const sideFace = useLeft ? [d, a, at, dt] : [b1, c, ct, bt];
     const roofFace = [at, bt, ct, dt];
@@ -1372,18 +1713,45 @@ function drawBuilding(b, p) {
     fillFace(frontFace, b.color, 'rgba(0,0,0,0.08)');
     fillFace(roofFace, b.roofColor, 'rgba(255,255,255,0.05)');
 
-    // Windows (front face only for readability)
-    let winRows = Math.floor(b.h / 10);
-    let winCols = Math.floor(b.w / 12);
-    let s = p.scale;
-    for (let wy = 0; wy < winRows; wy++) {
-        for (let wx = 0; wx < winCols; wx++) {
-            let winX = (frontFace[0].x + frontFace[1].x) / 2 + (wx + 0.5 - winCols / 2) * (b.w * s / winCols);
-            let winY = frontFace[3].y + (wy + 0.5) * ((frontFace[0].y - frontFace[3].y) / winRows);
-            let ws = Math.max(1.5, s * 3.5);
-            let lit = Math.sin(b.x * 13 + b.z * 7 + wx * 3 + wy * 5) > 0.3;
-            ctx.fillStyle = lit ? 'rgba(255,200,80,0.55)' : 'rgba(20,20,30,0.7)';
-            ctx.fillRect(winX - ws, winY - ws * 1.2, ws * 2, ws * 2.4);
+    // Windows projected directly onto the face to avoid floating artifacts.
+    let frontWidth = Math.hypot(frontFace[1].x - frontFace[0].x, frontFace[1].y - frontFace[0].y);
+    let frontHeight = Math.hypot(frontFace[3].x - frontFace[0].x, frontFace[3].y - frontFace[0].y);
+    let winRows = clamp(Math.floor(b.h / 10), 1, 8);
+    let winCols = clamp(Math.floor(b.w / 12), 1, 8);
+
+    if (b.type === 'house') {
+        winRows = Math.min(winRows, 2);
+        winCols = Math.min(winCols, 3);
+    }
+    if (b.type === 'warehouse' || b.type === 'barn') {
+        winRows = Math.min(winRows, 2);
+        winCols = Math.min(winCols, 2);
+    }
+
+    if (frontWidth > 8 && frontHeight > 8 && winRows > 0 && winCols > 0) {
+        const padU = 0.12;
+        const padV = 0.14;
+        const uStep = (1 - padU * 2) / winCols;
+        const vStep = (1 - padV * 2) / winRows;
+
+        for (let wy = 0; wy < winRows; wy++) {
+            let v0 = padV + wy * vStep + vStep * 0.2;
+            let v1 = padV + wy * vStep + vStep * 0.8;
+            let left0 = lerpPoint(frontFace[0], frontFace[3], v0);
+            let right0 = lerpPoint(frontFace[1], frontFace[2], v0);
+            let left1 = lerpPoint(frontFace[0], frontFace[3], v1);
+            let right1 = lerpPoint(frontFace[1], frontFace[2], v1);
+
+            for (let wx = 0; wx < winCols; wx++) {
+                let u0 = padU + wx * uStep + uStep * 0.2;
+                let u1 = padU + wx * uStep + uStep * 0.8;
+                let q1 = lerpPoint(left0, right0, u0);
+                let q2 = lerpPoint(left0, right0, u1);
+                let q3 = lerpPoint(left1, right1, u1);
+                let q4 = lerpPoint(left1, right1, u0);
+                let lit = Math.sin(b.x * 13 + b.z * 7 + wx * 3 + wy * 5) > 0.3;
+                fillQuad([q1, q2, q3, q4], lit ? 'rgba(255,200,80,0.55)' : 'rgba(20,20,30,0.7)');
+            }
         }
     }
 
@@ -1638,7 +2006,141 @@ function drawScope() {
     }
 }
 
+function getStreakMilestone(streakCount) {
+    return STREAK_MILESTONES.find(m => m.count === streakCount) || null;
+}
+
+function addStreakPopup(text, color, big = false) {
+    streakPopups.push({
+        text,
+        color,
+        big,
+        life: big ? 1.55 : 1.15,
+        maxLife: big ? 1.55 : 1.15,
+        rise: 0
+    });
+    if (streakPopups.length > 6) {
+        streakPopups.shift();
+    }
+}
+
+function playStreakSound(streakCount, milestone) {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    const base = milestone ? milestone.tone : 470 + Math.min(streakCount, 12) * 22;
+    const notes = milestone ? [1, 1.18, 1.42] : [1, 1.2];
+
+    notes.forEach((ratio, idx) => {
+        const t = now + idx * 0.045;
+        const osc = audioCtx.createOscillator();
+        osc.type = milestone ? 'square' : 'triangle';
+        osc.frequency.setValueAtTime(base * ratio, t);
+        osc.frequency.exponentialRampToValueAtTime(base * ratio * 0.96, t + 0.11);
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(milestone ? 0.08 : 0.06, t + 0.004);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + 0.13);
+    });
+}
+
+function triggerStreakFeedback() {
+    if (streak < 2) return;
+    const milestone = getStreakMilestone(streak);
+    if (milestone) {
+        addStreakPopup(milestone.label, milestone.color, true);
+    } else {
+        addStreakPopup(`${streak}x STREAK`, 'rgba(255,230,150,0.95)');
+    }
+    playStreakSound(streak, milestone);
+}
+
+function drawStreakPopups() {
+    if (!streakPopups.length) return;
+
+    const baseX = W / 2;
+    const baseY = H * 0.2;
+
+    for (let i = 0; i < streakPopups.length; i++) {
+        const popup = streakPopups[i];
+        const alpha = clamp(popup.life / popup.maxLife, 0, 1);
+        const y = baseY - popup.rise - (streakPopups.length - 1 - i) * 20;
+        const size = popup.big ? 30 : 22;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = popup.big ? 4 : 3;
+        ctx.strokeStyle = 'rgba(12,12,18,0.85)';
+        ctx.fillStyle = popup.color;
+        ctx.font = `bold ${size}px "Courier New", monospace`;
+        ctx.strokeText(popup.text, baseX, y);
+        ctx.fillText(popup.text, baseX, y);
+        ctx.restore();
+    }
+}
+
 // ─── SHOOTING ──────────────────────────────────────────────
+function isHeadshotAtCrosshair(cx, cy, p, baseP, headP, bodyH) {
+    if (zombieSprite && zombieSpriteHitMask) {
+        const mask = zombieSpriteHitMask;
+        const drawH = bodyH * 1.2;
+        const drawW = drawH * (mask.w / mask.h);
+        const drawX = baseP.x - drawW / 2;
+        const drawY = baseP.y - drawH;
+        if (cx < drawX || cx >= drawX + drawW || cy < drawY || cy >= drawY + drawH) {
+            return false;
+        }
+
+        const sx = ((cx - drawX) / drawW) * mask.w;
+        const sy = ((cy - drawY) / drawH) * mask.h;
+        const xc = Math.max(0, Math.min(mask.w - 1, Math.round(sx)));
+        const yc = Math.max(0, Math.min(mask.h - 1, Math.round(sy)));
+        const samplePoints = [];
+        for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+                const mx = Math.max(0, Math.min(mask.w - 1, xc + ox));
+                const my = Math.max(0, Math.min(mask.h - 1, yc + oy));
+                samplePoints.push([mx, my]);
+            }
+        }
+        for (let [mx, my] of samplePoints) {
+            const idx = my * mask.w + mx;
+            if (mask.headHitMask && mask.headHitMask[idx]) return true;
+            if (mask.alpha[idx] < ZOMBIE_HIT_ALPHA_THRESHOLD) continue;
+            if (mask.headMask[idx]) return true;
+            if (mask.columnHeadLimit && mask.columnHeadLimit[mx] >= 0 && my <= mask.columnHeadLimit[mx]) return true;
+        }
+
+        // Forehead/dome fallback in sprite space.
+        const u = sx / mask.w;
+        const v = sy / mask.h;
+        const domeNx = (u - 0.5) / 0.34;
+        const domeNy = (v - 0.23) / 0.29;
+        if (v <= 0.58 && domeNx * domeNx + domeNy * domeNy <= 1.15) return true;
+        if (v <= 0.46 && Math.abs(u - 0.5) <= 0.33) return true;
+    }
+
+    // Geometric fallback and extra top-cap forgiveness.
+    let headX = p.x;
+    let headY = headP.y + bodyH * 0.17;
+    let headRadiusX = Math.max(5, bodyH * 0.18);
+    let headRadiusY = Math.max(6, bodyH * 0.23);
+    let nx = (cx - headX) / headRadiusX;
+    let ny = (cy - headY) / headRadiusY;
+    if ((nx * nx + ny * ny) <= 1) return true;
+
+    const inForeheadCap =
+        Math.abs(cx - headX) <= headRadiusX * 0.92 &&
+        cy >= headP.y - bodyH * 0.08 &&
+        cy <= headY;
+    return inForeheadCap;
+}
+
 function shoot() {
     muzzleFlash = 1;
     recoilT = 1;
@@ -1647,32 +2149,26 @@ function shoot() {
     // Play shot sound
     playSound('shot');
 
-    // Raycast - check what's at center of screen
-    // We cast a ray from camera through center, check against zombie bounding boxes
-    let hit = false;
     let closestZ = null;
     let closestDist = Infinity;
+    const cx = W / 2;
+    const cy = H / 2;
 
     for (let z of zombies) {
         if (z.dead) continue;
         let p = project(z.x, z.height / 2, z.z);
         if (!p) continue;
 
-        let bodyH = z.height * p.scale;
-        let bodyW = bodyH * 0.35;
         let baseP = project(z.x, 0, z.z);
         let headP = project(z.x, z.height, z.z);
         if (!baseP || !headP) continue;
+        let bodyH = baseP.y - headP.y;
+        if (bodyH < 2) continue;
 
-        let cx = W / 2;
-        let cy = H / 2;
-        let dx = cx - p.x;
-
-        if (Math.abs(dx) < bodyW && cy > headP.y - bodyH * 0.15 && cy < baseP.y) {
-            if (p.depth < closestDist) {
-                closestDist = p.depth;
-                closestZ = z;
-            }
+        if (!isHeadshotAtCrosshair(cx, cy, p, baseP, headP, bodyH)) continue;
+        if (p.depth < closestDist) {
+            closestDist = p.depth;
+            closestZ = z;
         }
     }
 
@@ -1685,6 +2181,7 @@ function shoot() {
         document.getElementById('kills').textContent = kills;
         document.getElementById('streak').textContent = streak;
         updateRemainingUI();
+        triggerStreakFeedback();
 
         // Blood particles
         for (let i = 0; i < 8; i++) {
@@ -1714,49 +2211,272 @@ function initAudio() {
     if (!audioCtx) audioCtx = new AudioCtx();
 }
 
+function ensureAudioRunning() {
+    initAudio();
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function midiToHz(note) {
+    return 440 * Math.pow(2, (note - 69) / 12);
+}
+
+function updateMusicButton() {
+    const button = document.getElementById('music-toggle');
+    if (button) button.textContent = 'MUSIC: ' + (musicOn ? 'ON' : 'OFF');
+}
+
+function scheduleKick(time) {
+    if (!audioCtx || !musicSynth) return;
+    let osc = audioCtx.createOscillator();
+    let gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(120, time);
+    osc.frequency.exponentialRampToValueAtTime(42, time + 0.1);
+    gain.gain.setValueAtTime(0.08, time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.11);
+    osc.connect(gain);
+    gain.connect(musicSynth.master);
+    osc.start(time);
+    osc.stop(time + 0.12);
+}
+
+function scheduleSnare(time) {
+    if (!audioCtx || !musicSynth) return;
+    let noise = audioCtx.createBufferSource();
+    let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+    let data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    noise.buffer = buf;
+
+    let hp = audioCtx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1300;
+    let gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.03, time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.08);
+
+    noise.connect(hp);
+    hp.connect(gain);
+    gain.connect(musicSynth.master);
+    noise.start(time);
+    noise.stop(time + 0.085);
+}
+
+function scheduleMusicStep() {
+    if (!audioCtx || !musicSynth) return;
+    const stepDur = 60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT;
+    const t = audioCtx.currentTime + 0.02;
+    const leadNote = MUSIC_LEAD_PATTERN[musicStep % MUSIC_LEAD_PATTERN.length];
+    const bassNote = MUSIC_BASS_PATTERN[musicStep % MUSIC_BASS_PATTERN.length];
+
+    musicSynth.leadOsc.frequency.setValueAtTime(midiToHz(leadNote), t);
+    musicSynth.leadGain.gain.cancelScheduledValues(t);
+    musicSynth.leadGain.gain.setValueAtTime(0.0001, t);
+    musicSynth.leadGain.gain.linearRampToValueAtTime(0.075, t + 0.008);
+    musicSynth.leadGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.9);
+
+    musicSynth.bassOsc.frequency.setValueAtTime(midiToHz(bassNote), t);
+    musicSynth.bassGain.gain.cancelScheduledValues(t);
+    musicSynth.bassGain.gain.setValueAtTime(0.0001, t);
+    musicSynth.bassGain.gain.linearRampToValueAtTime(0.085, t + 0.01);
+    musicSynth.bassGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.95);
+
+    if (musicStep % 4 === 0) scheduleKick(t);
+    if (musicStep % 4 === 2) scheduleSnare(t);
+
+    musicStep = (musicStep + 1) % MUSIC_LEAD_PATTERN.length;
+}
+
+function startMusic() {
+    if (!audioCtx || musicSynth) return;
+
+    const master = audioCtx.createGain();
+    master.gain.value = 0.95;
+
+    const toneFilter = audioCtx.createBiquadFilter();
+    toneFilter.type = 'lowpass';
+    toneFilter.frequency.value = 1800;
+    toneFilter.Q.value = 0.7;
+
+    const leadOsc = audioCtx.createOscillator();
+    leadOsc.type = 'square';
+    const leadGain = audioCtx.createGain();
+    leadGain.gain.value = 0.0001;
+
+    const bassOsc = audioCtx.createOscillator();
+    bassOsc.type = 'triangle';
+    const bassGain = audioCtx.createGain();
+    bassGain.gain.value = 0.0001;
+
+    leadOsc.connect(leadGain);
+    bassOsc.connect(bassGain);
+    leadGain.connect(toneFilter);
+    bassGain.connect(toneFilter);
+    toneFilter.connect(master);
+    master.connect(audioCtx.destination);
+
+    leadOsc.start();
+    bassOsc.start();
+
+    musicSynth = { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain };
+    musicStep = 0;
+    scheduleMusicStep();
+
+    const stepMs = (60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT) * 1000;
+    musicTimer = setInterval(scheduleMusicStep, stepMs);
+}
+
+function stopMusic() {
+    if (!musicSynth || !audioCtx) return;
+    if (musicTimer) {
+        clearInterval(musicTimer);
+        musicTimer = null;
+    }
+
+    const { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain } = musicSynth;
+    const t = audioCtx.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    leadOsc.stop(t + 0.13);
+    bassOsc.stop(t + 0.13);
+
+    setTimeout(() => {
+        try { leadOsc.disconnect(); } catch (_) { }
+        try { leadGain.disconnect(); } catch (_) { }
+        try { bassOsc.disconnect(); } catch (_) { }
+        try { bassGain.disconnect(); } catch (_) { }
+        try { toneFilter.disconnect(); } catch (_) { }
+        try { master.disconnect(); } catch (_) { }
+    }, 200);
+
+    musicSynth = null;
+}
+
+function setMusicEnabled(enabled) {
+    if (enabled) {
+        ensureAudioRunning();
+        startMusic();
+        musicOn = true;
+    } else {
+        stopMusic();
+        musicOn = false;
+    }
+    updateMusicButton();
+}
+
 function playSound(type) {
     if (!audioCtx) return;
     let now = audioCtx.currentTime;
 
     if (type === 'shot') {
-        // Sniper shot - sharp crack then echo
-        let noise = audioCtx.createBufferSource();
-        let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.3, audioCtx.sampleRate);
-        let data = buf.getChannelData(0);
+        // High-powered rifle: sharp supersonic crack + low blast + mechanical click + short tail.
+        const variation = rand(0.96, 1.04);
+        const noiseLen = 0.25;
+        const shotBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * noiseLen, audioCtx.sampleRate);
+        const data = shotBuf.getChannelData(0);
         for (let i = 0; i < data.length; i++) {
             let t = i / audioCtx.sampleRate;
-            data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 25) * 0.4;
+            // Slightly pink-ish noise contour to avoid hiss-only character.
+            data[i] = (Math.random() * 2 - 1) * (0.7 * Math.exp(-t * 18) + 0.3 * Math.exp(-t * 7));
         }
-        noise.buffer = buf;
 
-        let filter = audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 800;
-        filter.frequency.setValueAtTime(3000, now);
-        filter.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+        let shotMaster = audioCtx.createGain();
+        shotMaster.gain.value = 0.9;
+        let shotComp = audioCtx.createDynamicsCompressor();
+        shotComp.threshold.value = -16;
+        shotComp.knee.value = 10;
+        shotComp.ratio.value = 5;
+        shotComp.attack.value = 0.001;
+        shotComp.release.value = 0.11;
+        shotMaster.connect(shotComp);
+        shotComp.connect(audioCtx.destination);
 
-        let gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(0.5, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+        function env(gainNode, t0, peak, attack, decay) {
+            gainNode.gain.cancelScheduledValues(t0);
+            gainNode.gain.setValueAtTime(0.0001, t0);
+            gainNode.gain.linearRampToValueAtTime(peak, t0 + attack);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
+        }
 
-        noise.connect(filter);
-        filter.connect(gain);
-        gain.connect(audioCtx.destination);
-        noise.start(now);
+        // Supersonic crack (bright, very short).
+        let crack = audioCtx.createBufferSource();
+        crack.buffer = shotBuf;
+        let crackHP = audioCtx.createBiquadFilter();
+        crackHP.type = 'highpass';
+        crackHP.frequency.value = 1800 * variation;
+        let crackPeak = audioCtx.createBiquadFilter();
+        crackPeak.type = 'peaking';
+        crackPeak.frequency.value = 3200 * variation;
+        crackPeak.Q.value = 1.1;
+        crackPeak.gain.value = 5;
+        let crackGain = audioCtx.createGain();
+        env(crackGain, now, 0.58, 0.0012, 0.045);
+        crack.connect(crackHP);
+        crackHP.connect(crackPeak);
+        crackPeak.connect(crackGain);
+        crackGain.connect(shotMaster);
+        crack.start(now);
+        crack.stop(now + 0.07);
 
-        // Echo
-        let echo = audioCtx.createBufferSource();
-        echo.buffer = buf;
-        let egain = audioCtx.createGain();
-        egain.gain.setValueAtTime(0.15, now + 0.15);
-        egain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
-        let efilter = audioCtx.createBiquadFilter();
-        efilter.type = 'lowpass';
-        efilter.frequency.value = 500;
-        echo.connect(efilter);
-        efilter.connect(egain);
-        egain.connect(audioCtx.destination);
-        echo.start(now + 0.15);
+        // Muzzle blast body (low-mid punch).
+        let blastNoise = audioCtx.createBufferSource();
+        blastNoise.buffer = shotBuf;
+        let blastLP = audioCtx.createBiquadFilter();
+        blastLP.type = 'lowpass';
+        blastLP.frequency.setValueAtTime(820 * variation, now);
+        blastLP.frequency.exponentialRampToValueAtTime(180, now + 0.12);
+        let blastGain = audioCtx.createGain();
+        env(blastGain, now, 0.26, 0.002, 0.17);
+        blastNoise.connect(blastLP);
+        blastLP.connect(blastGain);
+        blastGain.connect(shotMaster);
+        blastNoise.start(now);
+        blastNoise.stop(now + 0.2);
+
+        // Pressure wave thump.
+        let thumpOsc = audioCtx.createOscillator();
+        thumpOsc.type = 'triangle';
+        thumpOsc.frequency.setValueAtTime(180 * variation, now);
+        thumpOsc.frequency.exponentialRampToValueAtTime(58 * variation, now + 0.09);
+        let thumpGain = audioCtx.createGain();
+        env(thumpGain, now, 0.1, 0.001, 0.1);
+        thumpOsc.connect(thumpGain);
+        thumpGain.connect(shotMaster);
+        thumpOsc.start(now);
+        thumpOsc.stop(now + 0.11);
+
+        // Mechanical action click.
+        let clickOsc = audioCtx.createOscillator();
+        clickOsc.type = 'square';
+        clickOsc.frequency.setValueAtTime(1900 * variation, now + 0.012);
+        clickOsc.frequency.exponentialRampToValueAtTime(900 * variation, now + 0.038);
+        let clickGain = audioCtx.createGain();
+        env(clickGain, now + 0.012, 0.06, 0.001, 0.03);
+        clickOsc.connect(clickGain);
+        clickGain.connect(shotMaster);
+        clickOsc.start(now + 0.012);
+        clickOsc.stop(now + 0.05);
+
+        // Short outdoor reflections.
+        for (let i = 0; i < 2; i++) {
+            let t0 = now + 0.11 + i * 0.095;
+            let tail = audioCtx.createBufferSource();
+            tail.buffer = shotBuf;
+            let tailBP = audioCtx.createBiquadFilter();
+            tailBP.type = 'bandpass';
+            tailBP.frequency.value = (700 - i * 120) * variation;
+            tailBP.Q.value = 0.75;
+            let tailGain = audioCtx.createGain();
+            env(tailGain, t0, 0.1 / (i + 1), 0.002, 0.16);
+            tail.connect(tailBP);
+            tailBP.connect(tailGain);
+            tailGain.connect(shotMaster);
+            tail.start(t0);
+            tail.stop(t0 + 0.18);
+        }
     }
 
     if (type === 'hit') {
@@ -1788,46 +2508,7 @@ function playSound(type) {
 }
 
 function toggleMusic() {
-    if (!audioCtx) initAudio();
-    const button = document.getElementById('music-toggle');
-    if (!musicOn) {
-        musicOsc = audioCtx.createOscillator();
-        let bassOsc = audioCtx.createOscillator();
-        const bassGain = audioCtx.createGain();
-        musicGain = audioCtx.createGain();
-        musicOsc.type = 'triangle';
-        musicOsc.frequency.value = 110;
-        bassOsc.type = 'sine';
-        bassOsc.frequency.value = 55;
-        musicGain.gain.value = 0.05;
-        bassGain.gain.value = 0.08;
-
-        musicOsc.connect(musicGain);
-        bassOsc.connect(bassGain);
-        musicGain.connect(audioCtx.destination);
-        bassGain.connect(audioCtx.destination);
-
-        musicOsc.start();
-        bassOsc.start();
-        musicOsc.bassOsc = bassOsc;
-        musicOsc.bassGain = bassGain;
-
-        musicOn = true;
-        if (button) button.textContent = 'MUSIC: ON';
-    } else {
-        if (musicOsc) {
-            if (musicOsc.bassOsc) {
-                musicOsc.bassOsc.stop();
-                musicOsc.bassGain.disconnect();
-            }
-            musicOsc.stop();
-            musicGain.disconnect();
-            musicOsc = null;
-            musicGain = null;
-        }
-        musicOn = false;
-        if (button) button.textContent = 'MUSIC: OFF';
-    }
+    setMusicEnabled(!musicOn);
 }
 
 // ─── INPUT ─────────────────────────────────────────────────
@@ -1837,24 +2518,26 @@ document.addEventListener('mousemove', (e) => {
     // Push mouse right → aim right, push mouse down → aim down
     yaw -= e.movementX * sensitivity;
     pitch -= e.movementY * sensitivity;
-    pitch = clamp(pitch, -0.3, Math.PI / 2 - 0.01);
+    clampPitchToView();
 });
 
 document.addEventListener('wheel', (e) => {
     if (!started) return;
     zoom *= e.deltaY > 0 ? 0.9 : 1.1;
     zoom = clamp(zoom, CFG.MIN_ZOOM, CFG.MAX_ZOOM);
+    clampPitchToView();
 });
 
 document.addEventListener('mousedown', (e) => {
     if (!started) {
         started = true;
         document.getElementById('title-screen').style.display = 'none';
-        initAudio();
+        ensureAudioRunning();
         canvas.requestPointerLock();
         return;
     }
     if (e.button === 0) {
+        ensureAudioRunning();
         if (!document.pointerLockElement) {
             canvas.requestPointerLock();
             return;
@@ -1870,8 +2553,13 @@ if (musicToggle) {
         toggleMusic();
     });
 }
+updateMusicButton();
 
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'm' || e.key === 'M') {
+        toggleMusic();
+        return;
+    }
     if (e.key === 'Escape' && document.pointerLockElement) {
         document.exitPointerLock();
     }
@@ -1896,9 +2584,11 @@ function gameLoop(time) {
     if (recoilT > 0) {
         pitch += Math.sin(recoilT * Math.PI) * 0.0005;
     }
+    clampPitchToView();
 
     drawScene();
     drawScope();
+    drawStreakPopups();
 
     requestAnimationFrame(gameLoop);
 }
