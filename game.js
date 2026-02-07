@@ -37,20 +37,80 @@ let musicOn = false;
 let musicSynth = null;
 let musicTimer = null;
 let musicStep = 0;
-const MUSIC_BPM = 124;
+let musicSection = 0;
+let musicMeasure = 0;
+const MUSIC_BPM = 84;
 const MUSIC_STEPS_PER_BEAT = 4;
-const MUSIC_LEAD_PATTERN = [
-    57, 60, 64, 60,
-    57, 60, 62, 60,
-    55, 59, 62, 59,
-    55, 59, 60, 59
+const MUSIC_STEPS_PER_BAR = 16;
+
+// Atmospheric minor-key progressions: Am - F - Dm - E with eerie variation
+const MUSIC_SECTIONS = [
+    {   // Section A: sparse, creeping
+        lead: [
+            69,0,72,0, 76,0,72,0, 69,0,67,0, 65,0,67,0,
+            65,0,69,0, 72,0,69,0, 65,0,64,0, 62,0,64,0,
+            62,0,65,0, 69,0,65,0, 62,0,60,0, 57,0,60,0,
+            64,0,68,0, 71,0,68,0, 64,0,68,0, 71,0,76,0,
+        ],
+        bass: [
+            45,0,45,0, 45,0,45,0, 45,0,45,0, 45,0,45,0,
+            41,0,41,0, 41,0,41,0, 41,0,41,0, 41,0,41,0,
+            38,0,38,0, 38,0,38,0, 38,0,38,0, 38,0,38,0,
+            40,0,40,0, 40,0,40,0, 40,0,40,0, 40,0,40,0,
+        ],
+        pad: [57,60,64, 53,57,60, 50,53,57, 52,56,59],
+        hihat: true, kickSnare: true,
+    },
+    {   // Section B: darker, more rhythmic
+        lead: [
+            69,0,0,72, 0,76,0,72, 69,0,0,67, 0,65,0,67,
+            67,0,0,71, 0,74,0,71, 67,0,0,65, 0,64,0,65,
+            65,0,0,69, 0,72,0,69, 65,0,0,64, 0,62,0,64,
+            64,0,0,68, 0,71,0,68, 64,0,0,71, 0,76,0,71,
+        ],
+        bass: [
+            45,0,45,45, 0,45,0,45, 45,0,45,0, 45,0,45,0,
+            43,0,43,43, 0,43,0,43, 43,0,43,0, 43,0,43,0,
+            41,0,41,41, 0,41,0,41, 41,0,41,0, 41,0,41,0,
+            40,0,40,40, 0,40,0,40, 40,0,40,0, 40,0,40,0,
+        ],
+        pad: [57,60,64, 55,59,62, 53,57,60, 52,56,59],
+        hihat: true, kickSnare: true,
+    },
+    {   // Section C: ambient breakdown, no drums
+        lead: [
+            76,0,0,0, 0,0,72,0, 0,0,0,0, 69,0,0,0,
+            0,0,0,0, 74,0,0,0, 0,0,71,0, 0,0,0,0,
+            72,0,0,0, 0,0,69,0, 0,0,0,0, 65,0,0,0,
+            0,0,0,0, 71,0,0,0, 0,0,76,0, 0,0,0,0,
+        ],
+        bass: [
+            45,0,0,0, 0,0,0,0, 45,0,0,0, 0,0,0,0,
+            41,0,0,0, 0,0,0,0, 41,0,0,0, 0,0,0,0,
+            38,0,0,0, 0,0,0,0, 38,0,0,0, 0,0,0,0,
+            40,0,0,0, 0,0,0,0, 40,0,0,0, 0,0,0,0,
+        ],
+        pad: [57,60,64, 53,57,60, 50,53,57, 52,56,59],
+        hihat: false, kickSnare: false,
+    },
+    {   // Section D: tension build
+        lead: [
+            69,72,76,72, 69,72,76,79, 69,72,76,72, 69,67,65,67,
+            67,71,74,71, 67,71,74,76, 67,71,74,71, 67,65,64,65,
+            65,69,72,69, 65,69,72,74, 65,69,72,69, 65,64,62,64,
+            64,68,71,68, 64,68,71,76, 64,68,71,76, 79,76,71,68,
+        ],
+        bass: [
+            45,0,45,0, 45,0,45,45, 45,0,45,0, 45,45,45,0,
+            43,0,43,0, 43,0,43,43, 43,0,43,0, 43,43,43,0,
+            41,0,41,0, 41,0,41,41, 41,0,41,0, 41,41,41,0,
+            40,0,40,0, 40,0,40,40, 40,0,40,0, 40,40,40,40,
+        ],
+        pad: [57,60,64, 55,59,62, 53,57,60, 52,56,59],
+        hihat: true, kickSnare: true,
+    },
 ];
-const MUSIC_BASS_PATTERN = [
-    45, 45, 45, 45,
-    43, 43, 43, 43,
-    41, 41, 41, 41,
-    43, 43, 43, 43
-];
+const MUSIC_SECTION_ORDER = [0, 0, 1, 1, 2, 0, 3, 1];
 let zombieSprite = null;
 let zombieSpriteHitMask = null;
 const ZOMBIE_MASK_ALPHA_THRESHOLD = 10;
@@ -72,27 +132,38 @@ const STREAK_MILESTONES = [
     { count: 12, label: 'UNSTOPPABLE', color: '#ff7aa0', tone: 920 }
 ];
 
+let gameTime = 0; // running game clock for star twinkling etc.
+
 const THEMES = [
     {
-        sky: ['#151525', '#23203d', '#3b2445', '#2a1520'],
+        sky: ['#0e0e1f', '#1a1838', '#2e1e42', '#1f1020'],
         ground: ['#2a3a20', '#1a2a15'],
+        groundFar: '#1e2d17',
         stars: 'rgba(255,255,255,0.45)',
         clouds: 'rgba(70,60,80,0.35)',
         moon: 'rgba(240,230,200,0.9)',
+        horizonGlow: 'rgba(60,40,80,0.25)',
+        fogColor: [25, 20, 40],
     },
     {
-        sky: ['#0b1a2b', '#17334d', '#2b3f4d', '#1a2430'],
+        sky: ['#060f1e', '#122b48', '#223a4a', '#14202e'],
         ground: ['#223833', '#132826'],
+        groundFar: '#1a302b',
         stars: 'rgba(200,230,255,0.4)',
         clouds: 'rgba(80,100,120,0.35)',
         moon: 'rgba(200,220,255,0.9)',
+        horizonGlow: 'rgba(40,70,100,0.2)',
+        fogColor: [20, 30, 50],
     },
     {
-        sky: ['#2a120f', '#3c1d1c', '#5a2a24', '#2a1511'],
+        sky: ['#1e0a08', '#321615', '#4a2018', '#1e0f0a'],
         ground: ['#3b2d1c', '#21170f'],
+        groundFar: '#2e2216',
         stars: 'rgba(255,220,200,0.35)',
         clouds: 'rgba(90,70,60,0.35)',
         moon: 'rgba(255,210,180,0.85)',
+        horizonGlow: 'rgba(120,60,30,0.3)',
+        fogColor: [40, 25, 18],
     },
 ];
 
@@ -1067,7 +1138,7 @@ function spawnZombie() {
         wanderTimer: rand(0, 5),
         wanderDir: rand(0, Math.PI * 2),
         limbPhase: rand(0, Math.PI * 2),
-        height: rand(5, 7),
+        height: rand(5.8, 6.2),
         dead: false,
         deathTimer: 0,
         tint: randInt(60, 120),
@@ -1123,6 +1194,7 @@ function clampPitchToView() {
 let lastTime = 0;
 function update(dt) {
     if (!started) return;
+    gameTime += dt;
 
     const allDead = zombies.length > 0 && zombies.every(z => z.dead);
     if (allDead) {
@@ -1205,39 +1277,89 @@ function update(dt) {
 // ─── DRAW ──────────────────────────────────────────────────
 function drawScene() {
     const theme = THEMES[themeIndex] || THEMES[0];
-    // Sky gradient
+    // Sky gradient - richer with more stops
     let sky = ctx.createLinearGradient(0, 0, 0, H);
     sky.addColorStop(0, theme.sky[0]);
-    sky.addColorStop(0.4, theme.sky[1]);
-    sky.addColorStop(0.7, theme.sky[2]);
+    sky.addColorStop(0.3, theme.sky[1]);
+    sky.addColorStop(0.6, theme.sky[2]);
+    sky.addColorStop(0.85, theme.sky[3]);
     sky.addColorStop(1, theme.sky[3]);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, H);
 
-    // Stars
-    ctx.fillStyle = theme.stars;
-    for (let i = 0; i < 80; i++) {
-        let sx = (Math.sin(i * 127.1) * 0.5 + 0.5) * W;
-        let sy = (Math.cos(i * 311.7) * 0.3 + 0.1) * H;
-        ctx.fillRect(sx, sy, 1, 1);
+    // Horizon glow band - warm atmospheric light near the horizon
+    let horizonY = H * 0.52;
+    let glowGrad = ctx.createRadialGradient(W / 2, horizonY, 0, W / 2, horizonY, W * 0.7);
+    glowGrad.addColorStop(0, theme.horizonGlow);
+    glowGrad.addColorStop(0.5, theme.horizonGlow.replace(/[\d.]+\)$/, '0.12)'));
+    glowGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(0, horizonY - H * 0.25, W, H * 0.35);
+
+    // Stars - varying sizes, brightness, and twinkling
+    for (let i = 0; i < 160; i++) {
+        let sx = (Math.sin(i * 127.1 + 0.3) * 0.5 + 0.5) * W;
+        let sy = (Math.cos(i * 311.7 + 0.7) * 0.35 + 0.08) * H;
+        // Twinkling: each star has its own phase and speed
+        let twinklePhase = i * 2.37 + gameTime * (0.4 + (i % 7) * 0.15);
+        let twinkle = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(twinklePhase));
+        let baseBright = 0.15 + (i % 5) * 0.08;
+        let alpha = baseBright * twinkle;
+        let size = (i % 11 < 3) ? 1.8 : ((i % 11 < 7) ? 1.2 : 0.8);
+
+        // Brighter stars get a soft glow
+        if (size > 1.5 && alpha > 0.3) {
+            ctx.beginPath();
+            ctx.arc(sx, sy, size * 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(200,220,255,${alpha * 0.12})`;
+            ctx.fill();
+        }
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, size * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.fill();
     }
 
-    // Moon
+    // Moon - with better crater detail and outer halo
     let moonP = project(-200, 200, 400);
     if (moonP && moonP.depth > 0) {
         let mr = 30 * moonP.scale;
         if (mr > 2) {
+            // Outer atmospheric halo
+            let haloGrad = ctx.createRadialGradient(moonP.x, moonP.y, mr * 0.8, moonP.x, moonP.y, mr * 3.5);
+            haloGrad.addColorStop(0, 'rgba(255,255,240,0.06)');
+            haloGrad.addColorStop(0.4, 'rgba(200,210,230,0.03)');
+            haloGrad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = haloGrad;
             ctx.beginPath();
-            ctx.arc(moonP.x, moonP.y, mr * 2.2, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.04)';
+            ctx.arc(moonP.x, moonP.y, mr * 3.5, 0, Math.PI * 2);
             ctx.fill();
+
+            // Moon body
             ctx.beginPath();
             ctx.arc(moonP.x, moonP.y, mr, 0, Math.PI * 2);
             ctx.fillStyle = theme.moon;
             ctx.fill();
+
+            // Subtle surface variation (mare)
             ctx.beginPath();
-            ctx.arc(moonP.x + mr * 0.25, moonP.y - mr * 0.1, mr * 0.85, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(200,190,160,0.3)';
+            ctx.arc(moonP.x - mr * 0.15, moonP.y + mr * 0.1, mr * 0.35, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.08)';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(moonP.x + mr * 0.3, moonP.y - mr * 0.2, mr * 0.22, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.06)';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(moonP.x - mr * 0.05, moonP.y - mr * 0.35, mr * 0.18, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.05)';
+            ctx.fill();
+
+            // Shadow crescent
+            ctx.beginPath();
+            ctx.arc(moonP.x + mr * 0.3, moonP.y - mr * 0.05, mr * 0.92, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(15,15,25,0.25)';
             ctx.fill();
         }
     }
@@ -1333,21 +1455,41 @@ function drawScene() {
 }
 
 function drawAtmosphere() {
+    const theme = THEMES[themeIndex] || THEMES[0];
+    const fc = theme.fogColor || [20, 25, 35];
     let horizon = H * 0.35;
+
+    // Ground-level haze, stronger near bottom
     let haze = ctx.createLinearGradient(0, horizon - H * 0.06, 0, H);
-    haze.addColorStop(0, `rgba(20,25,35,0)`);
-    haze.addColorStop(0.45, `rgba(20,25,35,0.11)`);
-    haze.addColorStop(1, `rgba(15,18,25,0.35)`);
+    haze.addColorStop(0, `rgba(${fc[0]},${fc[1]},${fc[2]},0)`);
+    haze.addColorStop(0.3, `rgba(${fc[0]},${fc[1]},${fc[2]},0.06)`);
+    haze.addColorStop(0.6, `rgba(${fc[0]},${fc[1]},${fc[2]},0.14)`);
+    haze.addColorStop(1, `rgba(${fc[0]},${fc[1]},${fc[2]},0.4)`);
     ctx.fillStyle = haze;
     ctx.fillRect(0, horizon - H * 0.06, W, H - horizon + H * 0.06);
 
-    // Soft cloud veil near horizon. Avoid a hard full-width rectangle band.
-    let veil = ctx.createLinearGradient(0, horizon - H * 0.1, 0, horizon + H * 0.14);
-    veil.addColorStop(0, 'rgba(80,95,120,0)');
-    veil.addColorStop(0.45, 'rgba(80,95,120,0.07)');
-    veil.addColorStop(1, 'rgba(80,95,120,0)');
+    // Horizon cloud veil - soft atmospheric band
+    let veil = ctx.createLinearGradient(0, horizon - H * 0.12, 0, horizon + H * 0.16);
+    veil.addColorStop(0, `rgba(${fc[0]+50},${fc[1]+60},${fc[2]+70},0)`);
+    veil.addColorStop(0.35, `rgba(${fc[0]+50},${fc[1]+60},${fc[2]+70},0.06)`);
+    veil.addColorStop(0.55, `rgba(${fc[0]+50},${fc[1]+60},${fc[2]+70},0.08)`);
+    veil.addColorStop(1, `rgba(${fc[0]+50},${fc[1]+60},${fc[2]+70},0)`);
     ctx.fillStyle = veil;
-    ctx.fillRect(0, horizon - H * 0.12, W, H * 0.28);
+    ctx.fillRect(0, horizon - H * 0.14, W, H * 0.32);
+
+    // Distant treeline silhouette along the horizon
+    ctx.fillStyle = `rgba(${Math.max(0,fc[0]-5)},${Math.max(0,fc[1]-2)},${Math.max(0,fc[2]-5)},0.35)`;
+    ctx.beginPath();
+    ctx.moveTo(0, horizon + H * 0.02);
+    for (let x = 0; x <= W; x += 8) {
+        let treeH = 3 + Math.sin(x * 0.012 + 1.7) * 4 + Math.sin(x * 0.037 + 3.1) * 2.5
+                     + Math.sin(x * 0.089) * 1.5;
+        ctx.lineTo(x, horizon + H * 0.02 - treeH);
+    }
+    ctx.lineTo(W, horizon + H * 0.04);
+    ctx.lineTo(0, horizon + H * 0.04);
+    ctx.closePath();
+    ctx.fill();
 }
 
 function drawNavMarkers() {
@@ -1527,7 +1669,7 @@ function drawGround() {
         collector: '#44433d',
         rural: '#5a4c3a'
     };
-    // Simple: project corners of ground and fill
+    // Project ground corners to find screen bounds
     let points = [];
     let steps = 20;
     for (let gx = -CFG.TOWN_RADIUS; gx <= CFG.TOWN_RADIUS; gx += CFG.TOWN_RADIUS * 2 / steps) {
@@ -1536,18 +1678,29 @@ function drawGround() {
             if (p) points.push(p);
         }
     }
-    // Just fill a big ground area
     let minY = H, maxY = 0;
     for (let p of points) {
         if (p.y < minY) minY = p.y;
         if (p.y > maxY) maxY = p.y;
     }
     if (maxY > minY) {
+        // Multi-stop ground gradient for depth cues
         let grd = ctx.createLinearGradient(0, minY, 0, maxY);
-        grd.addColorStop(0, theme.ground[0]);
+        grd.addColorStop(0, theme.groundFar || theme.ground[0]);
+        grd.addColorStop(0.3, theme.ground[0]);
+        grd.addColorStop(0.7, theme.ground[1]);
         grd.addColorStop(1, theme.ground[1]);
         ctx.fillStyle = grd;
         ctx.fillRect(0, minY, W, maxY - minY + 50);
+
+        // Subtle ground texture: thin horizontal lines for field rows
+        let fc = theme.fogColor || [20, 25, 35];
+        for (let ty = minY; ty < maxY; ty += 6) {
+            let t = (ty - minY) / (maxY - minY);
+            let lineAlpha = 0.02 + t * 0.04;
+            ctx.fillStyle = `rgba(${fc[0]},${fc[1]},${fc[2]},${lineAlpha})`;
+            ctx.fillRect(0, ty, W, 1);
+        }
     }
 
     // Roads (Main Street + Cross Streets)
@@ -1667,6 +1820,7 @@ function drawBuilding(b, p) {
     let useLeft = b.x > 0;
     let useFront = b.z > 0;
     let fog = fogAlpha(depthAlongView(b.x, b.z));
+    const fc = (THEMES[themeIndex] || THEMES[0]).fogColor || [25, 30, 45];
 
     function fillFace(points, fill, shadow) {
         ctx.beginPath();
@@ -1682,7 +1836,7 @@ function drawBuilding(b, p) {
             ctx.fill();
         }
         if (fog > 0.01) {
-            ctx.fillStyle = `rgba(35,40,55,${fog})`;
+            ctx.fillStyle = `rgba(${fc[0]},${fc[1]},${fc[2]},${fog})`;
             ctx.fill();
         }
     }
@@ -1767,6 +1921,7 @@ function drawBuilding(b, p) {
 }
 
 function drawBackdrop(b, p) {
+    const bfc = (THEMES[themeIndex] || THEMES[0]).fogColor || [25, 30, 40];
     let x1 = b.x - b.w / 2;
     let x2 = b.x + b.w / 2;
     let z1 = b.z - b.d / 2;
@@ -1791,7 +1946,7 @@ function drawBackdrop(b, p) {
     ctx.closePath();
     ctx.fillStyle = b.color;
     ctx.fill();
-    ctx.fillStyle = `rgba(25,30,40,${fog})`;
+    ctx.fillStyle = `rgba(${bfc[0]},${bfc[1]},${bfc[2]},${fog})`;
     ctx.fill();
 
     ctx.beginPath();
@@ -1802,7 +1957,7 @@ function drawBackdrop(b, p) {
     ctx.closePath();
     ctx.fillStyle = b.roofColor;
     ctx.fill();
-    ctx.fillStyle = `rgba(25,30,40,${fog})`;
+    ctx.fillStyle = `rgba(${bfc[0]},${bfc[1]},${bfc[2]},${fog})`;
     ctx.fill();
 }
 
@@ -2232,96 +2387,265 @@ function scheduleKick(time) {
     let osc = audioCtx.createOscillator();
     let gain = audioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(120, time);
-    osc.frequency.exponentialRampToValueAtTime(42, time + 0.1);
-    gain.gain.setValueAtTime(0.08, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.11);
+    osc.frequency.setValueAtTime(90, time);
+    osc.frequency.exponentialRampToValueAtTime(38, time + 0.14);
+    gain.gain.setValueAtTime(0.065, time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.16);
     osc.connect(gain);
     gain.connect(musicSynth.master);
     osc.start(time);
-    osc.stop(time + 0.12);
+    osc.stop(time + 0.17);
 }
 
 function scheduleSnare(time) {
     if (!audioCtx || !musicSynth) return;
     let noise = audioCtx.createBufferSource();
-    let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+    let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.1, audioCtx.sampleRate);
     let data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     noise.buffer = buf;
 
     let hp = audioCtx.createBiquadFilter();
     hp.type = 'highpass';
-    hp.frequency.value = 1300;
+    hp.frequency.value = 1800;
     let gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(0.03, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.08);
+    gain.gain.setValueAtTime(0.022, time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.1);
 
     noise.connect(hp);
     hp.connect(gain);
     gain.connect(musicSynth.master);
     noise.start(time);
-    noise.stop(time + 0.085);
+    noise.stop(time + 0.11);
+}
+
+function scheduleHihat(time, open) {
+    if (!audioCtx || !musicSynth) return;
+    let noise = audioCtx.createBufferSource();
+    let dur = open ? 0.08 : 0.035;
+    let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+    let data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    noise.buffer = buf;
+
+    let bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 8000;
+    bp.Q.value = 1.2;
+    let gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(open ? 0.018 : 0.012, time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+    noise.connect(bp);
+    bp.connect(gain);
+    gain.connect(musicSynth.master);
+    noise.start(time);
+    noise.stop(time + dur + 0.01);
+}
+
+function schedulePadChord(time, notes, dur) {
+    if (!audioCtx || !musicSynth) return;
+    for (let note of notes) {
+        let osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = midiToHz(note);
+        let gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, time);
+        gain.gain.linearRampToValueAtTime(0.018, time + dur * 0.3);
+        gain.gain.linearRampToValueAtTime(0.014, time + dur * 0.7);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+        // Slow vibrato for eeriness
+        let lfo = audioCtx.createOscillator();
+        lfo.frequency.value = 3.5 + Math.random() * 1.5;
+        let lfoGain = audioCtx.createGain();
+        lfoGain.gain.value = 1.5;
+        lfo.connect(lfoGain);
+        lfoGain.connect(osc.frequency);
+
+        osc.connect(gain);
+        gain.connect(musicSynth.padFilter);
+        lfo.start(time);
+        osc.start(time);
+        lfo.stop(time + dur + 0.01);
+        osc.stop(time + dur + 0.01);
+    }
+}
+
+function scheduleAmbientDrone(time, note, dur) {
+    if (!audioCtx || !musicSynth) return;
+    let osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = midiToHz(note);
+    let filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(200, time);
+    filter.frequency.linearRampToValueAtTime(400, time + dur * 0.5);
+    filter.frequency.linearRampToValueAtTime(180, time + dur);
+    filter.Q.value = 2;
+    let gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.linearRampToValueAtTime(0.025, time + dur * 0.2);
+    gain.gain.linearRampToValueAtTime(0.02, time + dur * 0.8);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(musicSynth.master);
+    osc.start(time);
+    osc.stop(time + dur + 0.01);
+}
+
+function getCurrentSection() {
+    let idx = MUSIC_SECTION_ORDER[musicSection % MUSIC_SECTION_ORDER.length];
+    return MUSIC_SECTIONS[idx];
 }
 
 function scheduleMusicStep() {
     if (!audioCtx || !musicSynth) return;
+    const section = getCurrentSection();
     const stepDur = 60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT;
-    const t = audioCtx.currentTime + 0.02;
-    const leadNote = MUSIC_LEAD_PATTERN[musicStep % MUSIC_LEAD_PATTERN.length];
-    const bassNote = MUSIC_BASS_PATTERN[musicStep % MUSIC_BASS_PATTERN.length];
+    const t = audioCtx.currentTime + 0.025;
+    const patLen = section.lead.length;
+    const stepInSection = musicStep % patLen;
 
-    musicSynth.leadOsc.frequency.setValueAtTime(midiToHz(leadNote), t);
-    musicSynth.leadGain.gain.cancelScheduledValues(t);
-    musicSynth.leadGain.gain.setValueAtTime(0.0001, t);
-    musicSynth.leadGain.gain.linearRampToValueAtTime(0.075, t + 0.008);
-    musicSynth.leadGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.9);
+    // Lead voice - eerie detuned square
+    const leadNote = section.lead[stepInSection];
+    if (leadNote > 0) {
+        let osc = audioCtx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.value = midiToHz(leadNote);
+        let osc2 = audioCtx.createOscillator();
+        osc2.type = 'sawtooth';
+        osc2.frequency.value = midiToHz(leadNote) * 1.003; // slight detune
+        let gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(0.04, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + stepDur * 0.85);
+        let gain2 = audioCtx.createGain();
+        gain2.gain.setValueAtTime(0.0001, t);
+        gain2.gain.linearRampToValueAtTime(0.015, t + 0.01);
+        gain2.gain.exponentialRampToValueAtTime(0.0001, t + stepDur * 0.85);
+        osc.connect(gain);
+        osc2.connect(gain2);
+        gain.connect(musicSynth.leadFilter);
+        gain2.connect(musicSynth.leadFilter);
+        osc.start(t);
+        osc2.start(t);
+        osc.stop(t + stepDur);
+        osc2.stop(t + stepDur);
+    }
 
-    musicSynth.bassOsc.frequency.setValueAtTime(midiToHz(bassNote), t);
-    musicSynth.bassGain.gain.cancelScheduledValues(t);
-    musicSynth.bassGain.gain.setValueAtTime(0.0001, t);
-    musicSynth.bassGain.gain.linearRampToValueAtTime(0.085, t + 0.01);
-    musicSynth.bassGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.95);
+    // Bass voice - deep sub with slow attack
+    const bassNote = section.bass[stepInSection];
+    if (bassNote > 0) {
+        let osc = audioCtx.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.value = midiToHz(bassNote);
+        let gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(0.065, t + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + stepDur * 0.92);
+        osc.connect(gain);
+        gain.connect(musicSynth.bassFilter);
+        osc.start(t);
+        osc.stop(t + stepDur + 0.01);
+    }
 
-    if (musicStep % 4 === 0) scheduleKick(t);
-    if (musicStep % 4 === 2) scheduleSnare(t);
+    // Drums
+    if (section.kickSnare) {
+        // Kick: beats 0, 8 (half-time feel) + ghost at 12
+        if (stepInSection % 16 === 0 || stepInSection % 16 === 8) scheduleKick(t);
+        if (stepInSection % 16 === 12) {
+            let ghostKick = audioCtx.createOscillator();
+            let ghostGain = audioCtx.createGain();
+            ghostKick.type = 'sine';
+            ghostKick.frequency.setValueAtTime(70, t);
+            ghostKick.frequency.exponentialRampToValueAtTime(35, t + 0.1);
+            ghostGain.gain.setValueAtTime(0.03, t);
+            ghostGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+            ghostKick.connect(ghostGain);
+            ghostGain.connect(musicSynth.master);
+            ghostKick.start(t);
+            ghostKick.stop(t + 0.11);
+        }
+        // Snare: beat 4 (half-time)
+        if (stepInSection % 16 === 4) scheduleSnare(t);
+    }
 
-    musicStep = (musicStep + 1) % MUSIC_LEAD_PATTERN.length;
+    // Hi-hat pattern
+    if (section.hihat) {
+        if (stepInSection % 2 === 0) {
+            let isOpen = (stepInSection % 16 === 6 || stepInSection % 16 === 14);
+            scheduleHihat(t, isOpen);
+        }
+    }
+
+    // Pad chord - trigger at start of each 16-step bar
+    if (stepInSection % MUSIC_STEPS_PER_BAR === 0) {
+        let barIdx = Math.floor(stepInSection / MUSIC_STEPS_PER_BAR) % 4;
+        let chordNotes = section.pad.slice(barIdx * 3, barIdx * 3 + 3);
+        let barDur = stepDur * MUSIC_STEPS_PER_BAR;
+        schedulePadChord(t, chordNotes, barDur * 0.95);
+
+        // Drone on the root of the chord, one octave below
+        scheduleAmbientDrone(t, chordNotes[0] - 12, barDur * 0.9);
+    }
+
+    // Advance step and section tracking
+    musicStep++;
+    if (musicStep % patLen === 0) {
+        musicSection++;
+        musicMeasure = 0;
+    }
 }
 
 function startMusic() {
     if (!audioCtx || musicSynth) return;
 
     const master = audioCtx.createGain();
-    master.gain.value = 0.95;
+    master.gain.value = 0.85;
 
-    const toneFilter = audioCtx.createBiquadFilter();
-    toneFilter.type = 'lowpass';
-    toneFilter.frequency.value = 1800;
-    toneFilter.Q.value = 0.7;
+    // Lead chain: lowpass + slight reverb-like delay
+    const leadFilter = audioCtx.createBiquadFilter();
+    leadFilter.type = 'lowpass';
+    leadFilter.frequency.value = 1400;
+    leadFilter.Q.value = 1.2;
+    leadFilter.connect(master);
 
-    const leadOsc = audioCtx.createOscillator();
-    leadOsc.type = 'square';
-    const leadGain = audioCtx.createGain();
-    leadGain.gain.value = 0.0001;
+    // Bass chain: strong lowpass
+    const bassFilter = audioCtx.createBiquadFilter();
+    bassFilter.type = 'lowpass';
+    bassFilter.frequency.value = 600;
+    bassFilter.Q.value = 0.5;
+    bassFilter.connect(master);
 
-    const bassOsc = audioCtx.createOscillator();
-    bassOsc.type = 'triangle';
-    const bassGain = audioCtx.createGain();
-    bassGain.gain.value = 0.0001;
+    // Pad chain: bandpass for atmosphere
+    const padFilter = audioCtx.createBiquadFilter();
+    padFilter.type = 'bandpass';
+    padFilter.frequency.value = 900;
+    padFilter.Q.value = 0.4;
+    padFilter.connect(master);
 
-    leadOsc.connect(leadGain);
-    bassOsc.connect(bassGain);
-    leadGain.connect(toneFilter);
-    bassGain.connect(toneFilter);
-    toneFilter.connect(master);
+    // Simple delay for atmosphere (feedback loop)
+    const delay = audioCtx.createDelay(1.0);
+    delay.delayTime.value = 60 / MUSIC_BPM * 0.75; // dotted-eighth delay
+    const delayFeedback = audioCtx.createGain();
+    delayFeedback.gain.value = 0.25;
+    const delayFilter = audioCtx.createBiquadFilter();
+    delayFilter.type = 'lowpass';
+    delayFilter.frequency.value = 1200;
+    leadFilter.connect(delay);
+    delay.connect(delayFilter);
+    delayFilter.connect(delayFeedback);
+    delayFeedback.connect(delay);
+    delayFilter.connect(master);
+
     master.connect(audioCtx.destination);
 
-    leadOsc.start();
-    bassOsc.start();
-
-    musicSynth = { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain };
+    musicSynth = { master, leadFilter, bassFilter, padFilter, delay, delayFeedback };
     musicStep = 0;
+    musicSection = 0;
+    musicMeasure = 0;
     scheduleMusicStep();
 
     const stepMs = (60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT) * 1000;
@@ -2335,24 +2659,20 @@ function stopMusic() {
         musicTimer = null;
     }
 
-    const { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain } = musicSynth;
     const t = audioCtx.currentTime;
-    master.gain.cancelScheduledValues(t);
-    master.gain.setValueAtTime(master.gain.value, t);
-    master.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-    leadOsc.stop(t + 0.13);
-    bassOsc.stop(t + 0.13);
+    musicSynth.master.gain.cancelScheduledValues(t);
+    musicSynth.master.gain.setValueAtTime(musicSynth.master.gain.value, t);
+    musicSynth.master.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
 
     setTimeout(() => {
-        try { leadOsc.disconnect(); } catch (_) { }
-        try { leadGain.disconnect(); } catch (_) { }
-        try { bassOsc.disconnect(); } catch (_) { }
-        try { bassGain.disconnect(); } catch (_) { }
-        try { toneFilter.disconnect(); } catch (_) { }
-        try { master.disconnect(); } catch (_) { }
-    }, 200);
-
-    musicSynth = null;
+        try { musicSynth.leadFilter.disconnect(); } catch (_) { }
+        try { musicSynth.bassFilter.disconnect(); } catch (_) { }
+        try { musicSynth.padFilter.disconnect(); } catch (_) { }
+        try { musicSynth.delay.disconnect(); } catch (_) { }
+        try { musicSynth.delayFeedback.disconnect(); } catch (_) { }
+        try { musicSynth.master.disconnect(); } catch (_) { }
+        musicSynth = null;
+    }, 400);
 }
 
 function setMusicEnabled(enabled) {
