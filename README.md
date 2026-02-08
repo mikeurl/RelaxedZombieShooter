@@ -2,7 +2,7 @@
 
 > *"They're slow. They're harmless. They can't reach you. Take your time."*
 
-Welcome to the **Relaxed Zombie Shooter**, the chillest apocalypse you'll ever experience. Perched high in your invincible watchtower, you overlook a procedural rural town overrun by the undead. There's no rush, no health bar, and no pressure. Just you, your rifle, and an endless supply of targets.
+Welcome to the **Relaxed Zombie Shooter**, the chillest apocalypse you'll ever experience. Perched high in your invincible watchtower, you overlook a procedural rural town overrun by the undead. There's no rush, no health bar, and no pressure. Just you, your rifle, and an endless supply of bullets.
 
 ![Screenshot](https://github.com/mikeurl/RelaxedZombieShooter/assets/placeholder/gameplay.png)
 *(Note: Replace with actual gameplay screenshot if available)*
