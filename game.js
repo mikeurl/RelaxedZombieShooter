@@ -33,24 +33,7 @@ let muzzleFlash = 0;
 let recoilT = 0;
 let round = 1;
 let themeIndex = 0;
-let musicOn = false;
-let musicSynth = null;
-let musicTimer = null;
-let musicStep = 0;
-const MUSIC_BPM = 124;
-const MUSIC_STEPS_PER_BEAT = 4;
-const MUSIC_LEAD_PATTERN = [
-    57, 60, 64, 60,
-    57, 60, 62, 60,
-    55, 59, 62, 59,
-    55, 59, 60, 59
-];
-const MUSIC_BASS_PATTERN = [
-    45, 45, 45, 45,
-    43, 43, 43, 43,
-    41, 41, 41, 41,
-    43, 43, 43, 43
-];
+// Music loop config removed (see music.js)
 let zombieSprite = null;
 let zombieSpriteHitMask = null;
 const ZOMBIE_MASK_ALPHA_THRESHOLD = 10;
@@ -2208,7 +2191,12 @@ const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx;
 
 function initAudio() {
-    if (!audioCtx) audioCtx = new AudioCtx();
+    if (!audioCtx) {
+        audioCtx = new AudioCtx();
+        if (typeof Music !== 'undefined') {
+            Music.init(audioCtx);
+        }
+    }
 }
 
 function ensureAudioRunning() {
@@ -2224,148 +2212,27 @@ function midiToHz(note) {
 
 function updateMusicButton() {
     const button = document.getElementById('music-toggle');
-    if (button) button.textContent = 'MUSIC: ' + (musicOn ? 'ON' : 'OFF');
-}
+    if (!button) return;
 
-function scheduleKick(time) {
-    if (!audioCtx || !musicSynth) return;
-    let osc = audioCtx.createOscillator();
-    let gain = audioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(120, time);
-    osc.frequency.exponentialRampToValueAtTime(42, time + 0.1);
-    gain.gain.setValueAtTime(0.08, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.11);
-    osc.connect(gain);
-    gain.connect(musicSynth.master);
-    osc.start(time);
-    osc.stop(time + 0.12);
-}
-
-function scheduleSnare(time) {
-    if (!audioCtx || !musicSynth) return;
-    let noise = audioCtx.createBufferSource();
-    let buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
-    let data = buf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    noise.buffer = buf;
-
-    let hp = audioCtx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 1300;
-    let gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(0.03, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.08);
-
-    noise.connect(hp);
-    hp.connect(gain);
-    gain.connect(musicSynth.master);
-    noise.start(time);
-    noise.stop(time + 0.085);
-}
-
-function scheduleMusicStep() {
-    if (!audioCtx || !musicSynth) return;
-    const stepDur = 60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT;
-    const t = audioCtx.currentTime + 0.02;
-    const leadNote = MUSIC_LEAD_PATTERN[musicStep % MUSIC_LEAD_PATTERN.length];
-    const bassNote = MUSIC_BASS_PATTERN[musicStep % MUSIC_BASS_PATTERN.length];
-
-    musicSynth.leadOsc.frequency.setValueAtTime(midiToHz(leadNote), t);
-    musicSynth.leadGain.gain.cancelScheduledValues(t);
-    musicSynth.leadGain.gain.setValueAtTime(0.0001, t);
-    musicSynth.leadGain.gain.linearRampToValueAtTime(0.075, t + 0.008);
-    musicSynth.leadGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.9);
-
-    musicSynth.bassOsc.frequency.setValueAtTime(midiToHz(bassNote), t);
-    musicSynth.bassGain.gain.cancelScheduledValues(t);
-    musicSynth.bassGain.gain.setValueAtTime(0.0001, t);
-    musicSynth.bassGain.gain.linearRampToValueAtTime(0.085, t + 0.01);
-    musicSynth.bassGain.gain.exponentialRampToValueAtTime(0.0002, t + stepDur * 0.95);
-
-    if (musicStep % 4 === 0) scheduleKick(t);
-    if (musicStep % 4 === 2) scheduleSnare(t);
-
-    musicStep = (musicStep + 1) % MUSIC_LEAD_PATTERN.length;
-}
-
-function startMusic() {
-    if (!audioCtx || musicSynth) return;
-
-    const master = audioCtx.createGain();
-    master.gain.value = 0.95;
-
-    const toneFilter = audioCtx.createBiquadFilter();
-    toneFilter.type = 'lowpass';
-    toneFilter.frequency.value = 1800;
-    toneFilter.Q.value = 0.7;
-
-    const leadOsc = audioCtx.createOscillator();
-    leadOsc.type = 'square';
-    const leadGain = audioCtx.createGain();
-    leadGain.gain.value = 0.0001;
-
-    const bassOsc = audioCtx.createOscillator();
-    bassOsc.type = 'triangle';
-    const bassGain = audioCtx.createGain();
-    bassGain.gain.value = 0.0001;
-
-    leadOsc.connect(leadGain);
-    bassOsc.connect(bassGain);
-    leadGain.connect(toneFilter);
-    bassGain.connect(toneFilter);
-    toneFilter.connect(master);
-    master.connect(audioCtx.destination);
-
-    leadOsc.start();
-    bassOsc.start();
-
-    musicSynth = { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain };
-    musicStep = 0;
-    scheduleMusicStep();
-
-    const stepMs = (60 / MUSIC_BPM / MUSIC_STEPS_PER_BEAT) * 1000;
-    musicTimer = setInterval(scheduleMusicStep, stepMs);
-}
-
-function stopMusic() {
-    if (!musicSynth || !audioCtx) return;
-    if (musicTimer) {
-        clearInterval(musicTimer);
-        musicTimer = null;
+    if (typeof Music === 'undefined') {
+        button.textContent = 'MUSIC: OFF';
+        return;
     }
 
-    const { master, toneFilter, leadOsc, leadGain, bassOsc, bassGain } = musicSynth;
-    const t = audioCtx.currentTime;
-    master.gain.cancelScheduledValues(t);
-    master.gain.setValueAtTime(master.gain.value, t);
-    master.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-    leadOsc.stop(t + 0.13);
-    bassOsc.stop(t + 0.13);
-
-    setTimeout(() => {
-        try { leadOsc.disconnect(); } catch (_) { }
-        try { leadGain.disconnect(); } catch (_) { }
-        try { bassOsc.disconnect(); } catch (_) { }
-        try { bassGain.disconnect(); } catch (_) { }
-        try { toneFilter.disconnect(); } catch (_) { }
-        try { master.disconnect(); } catch (_) { }
-    }, 200);
-
-    musicSynth = null;
-}
-
-function setMusicEnabled(enabled) {
-    if (enabled) {
-        ensureAudioRunning();
-        startMusic();
-        musicOn = true;
+    const status = Music.getStatus();
+    if (status.startsWith('ERROR')) {
+        button.textContent = status; // Show full error
+        button.style.color = '#ff4444';
+    } else if (status === 'LOADING') {
+        button.textContent = 'MUSIC: LOADING...';
+        button.style.color = '#ffff55';
     } else {
-        stopMusic();
-        musicOn = false;
+        button.textContent = 'MUSIC: ' + (Music.isEnabled() ? 'ON' : 'OFF');
+        button.style.color = '#0f0';
     }
-    updateMusicButton();
 }
+
+// Old Music Functions Removed (see music.js)
 
 function playSound(type) {
     if (!audioCtx) return;
@@ -2508,7 +2375,8 @@ function playSound(type) {
 }
 
 function toggleMusic() {
-    setMusicEnabled(!musicOn);
+    Music.toggle();
+    updateMusicButton();
 }
 
 // ─── INPUT ─────────────────────────────────────────────────
